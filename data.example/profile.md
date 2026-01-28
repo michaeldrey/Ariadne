@@ -22,8 +22,3 @@ resume_filename: [Your Name] Resume.pdf
 - [Company]: [Title] ([scope/highlights])
 
 See `resume-content.md` for full career details.
-
-## Preferences
-
-- Project alias: [optional nickname for this system]
-- Session greeting style: friendly, includes quote of the day

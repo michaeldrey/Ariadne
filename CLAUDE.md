@@ -645,3 +645,8 @@ Only these values allowed for `outcome`:
 User-specific information (name, background, target roles, resume filename) is stored in `data/profile.md`. Read this file at session start to personalize responses and use the correct resume filename for PDF generation.
 
 See also `data/resume-content.md` for full career details and `data/work-stories.md` for interview stories.
+
+## Preferences
+
+- Project alias: Ariadne (public repo name)
+- Session greeting style: friendly, includes quote of the day
