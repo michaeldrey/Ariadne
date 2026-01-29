@@ -64,6 +64,8 @@ Read `work-stories.md` FIRST and cross-reference story keywords against JD requi
 ### Authenticity First
 When keyword optimization and authenticity conflict, **prefer authenticity**. Flag the tradeoff in your analysis rather than forcing unnatural language. David's voice and honest representation matter more than ATS optimization.
 
+**resume-draft.md must be publish-ready.** If a phrase is flagged `[REVIEW]` because it stretches honesty (not because you need a factual clarification), do NOT include it in resume-draft.md. Instead, propose it in comparison-analysis.md only, with reasoning for why David might or might not want to add it. The draft should contain only language David can defend in an interview without hedging.
+
 ### No Fabrication
 NEVER invent data, inflate numbers, or claim skills/experience not in the source material. If something would strengthen the resume but you can't verify it, flag it with `[REVIEW]` and note what information would help.
 
@@ -86,6 +88,8 @@ The resume tells a story of progression: individual contributor → manager → 
 **Inject keywords naturally** — Weave JD terminology into existing bullets where it fits without forcing. If a keyword can't be added naturally, note it in the analysis rather than keyword-stuffing.
 
 **Strengthen passive language** — Improve weak phrasing where it doesn't change meaning. Don't mechanically replace words; judge each case. "Helped with" might be accurate for collaborative work — don't force "led" if it's not true.
+
+**No hedged analogies** — Never write bullets that bridge to the target role with phrases like "similar to those required in," "analogous to," or "supporting patterns found in." If the experience is relevant, state what David did and let the reader draw the connection. If the connection requires a hedge, it's too weak for the resume — note it in comparison-analysis.md instead.
 
 **Amplify scope signals** — Team sizes, budget, service counts, user impact should be prominent, not buried mid-bullet.
 
