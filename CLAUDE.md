@@ -205,48 +205,99 @@ When the user sends a greeting to start the session, respond with:
 
 ## Commands
 
-### Job Search (Gemini CLI)
+### Job Search (JobBot API)
 
 When user says `"Run job search"`:
 
-**Step 1: Build the search prompt**
+**Step 1: Load search criteria and config**
 
-The search prompt is assembled from two files:
-- `prompts/gemini-search-prompt.md` — Template with agent instructions and output format
-- `data/search-criteria.md` — User's personal search criteria (gitignored)
+Read these files:
+- `data/search-criteria.md` — Extract target companies from "Target Companies" section
+- `data/config.json` — Get JobBot endpoint URL and API key
+- `data/tracker.json` — Collect all URLs to exclude (active, skipped, closed)
 
-Read both files, then replace `{{SEARCH_CRITERIA}}` in the template with the contents of `search-criteria.md`.
+**Step 2: Build exclusion list**
 
-**Step 2: Execute search**
-
-Write the assembled prompt to a temp file and send to Gemini:
-```bash
-# Assemble prompt (template + criteria injection)
-# Write to temp file, e.g., /tmp/search-prompt.md
-gemini -o text < /tmp/search-prompt.md > "data/search-results/gemini-results.md"
+From `data/tracker.json`, collect URLs from all arrays:
+```javascript
+excludeUrls = [
+  ...tracker.active.map(j => j.url),
+  ...tracker.skipped.map(j => j.url),
+  ...tracker.closed.map(j => j.url)
+]
 ```
 
-**Step 3: Deduplicate results (BEFORE displaying)**
+**Step 3: Call JobBot API**
 
-Read `data/tracker.json` and filter out roles that exist in ANY array:
-- `active` — currently tracking
-- `skipped` — previously skipped
-- `closed` — already concluded
+```bash
+curl -X POST "${config.jobbot.endpoint}" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: ${config.jobbot.apiKey}" \
+  -d '{
+    "companies": ["Anthropic", "Stripe", "Netflix", ...],
+    "roleLevels": ["Senior", "Staff", "Principal"],
+    "locations": ["Remote", "USA", "United States"],
+    "maxAgeDays": 14,
+    "excludeUrls": [...]
+  }'
+```
 
-Match by Company + Role similarity (e.g., "Dropbox - Core AI Platform" matches "Dropbox - SEM Core AI Platform").
+**Note:** The `locations` parameter filters jobs by location keywords. Extract location preferences from `data/search-criteria.md` (e.g., "Remote US" → `["Remote", "USA", "United States", "US"]`).
 
-**Step 3: Display results**
+**Step 4: Handle response**
 
-Show only NEW roles not found in data/tracker.json. For each result, indicate:
-- **NEW** — not in tracker
-- **TRACKING** — in active array (show stage)
-- **APPLIED** — in active array with stage >= Applied
-- **SKIPPED** — in skipped array
-- **CLOSED** — in closed array
+The API returns:
+```json
+{
+  "jobs": [
+    {
+      "id": "greenhouse-anthropic-123",
+      "title": "Staff Software Engineer, Infrastructure",
+      "company": "Anthropic",
+      "location": "SF / NYC / Seattle",
+      "url": "https://...",
+      "description": "...",
+      "postedDate": "2026-01-25",
+      "department": "Infrastructure",
+      "source": "greenhouse"
+    }
+  ],
+  "meta": {
+    "companiesSearched": ["Anthropic", "Stripe"],
+    "companiesNotSupported": ["SomeCompany"],
+    "totalCollected": 50,
+    "afterPreFilter": 20,
+    "afterExclusion": 18,
+    "afterLocation": 15,
+    "errors": []
+  }
+}
+```
+
+**Step 5: Display results**
+
+Show jobs in numbered table format:
+
+| # | Company | Role | Location | Posted | Link |
+|---|---------|------|----------|--------|------|
+| 1 | Anthropic | Staff Software Engineer, Infrastructure | SF / NYC / Seattle | Jan 25 | [Apply](url) |
+
+Include meta summary:
+- Searched: X companies
+- Not supported: [list if any]
+- Found: Y jobs (after filtering)
 
 After displaying, remind user: **Setup #N** to pursue, **Skip #N** to filter out.
 
-**Why Gemini?** Claude's WebSearch uses Brave (stale index). Gemini CLI uses Google Search (fresh index). Job postings are ephemeral - freshness matters.
+**Step 6: Save results**
+
+Write raw API response to `data/search-results/jobbot-results.json` for reference.
+
+**Fallback:** If JobBot API fails (network error, auth failure):
+1. Log the error
+2. Offer options: retry, use direct ATS API calls via Bash, or fall back to Gemini CLI
+
+**Why JobBot?** It scrapes real ATS APIs (Greenhouse, Lever, Ashby, Workday) directly — no hallucinated job postings. URLs are guaranteed to exist.
 
 ### Setup Command
 

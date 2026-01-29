@@ -1,0 +1,13 @@
+{
+  "jobbot": {
+    "endpoint": "https://jobsearch-YOUR_HASH-uc.a.run.app",
+    "apiKey": "YOUR_ARIADNE_API_KEY"
+  },
+  "dashboard": {
+    "projectName": "job-search-dashboard",
+    "passwordProtected": true
+  },
+  "pdf": {
+    "resumeFilename": "Resume.pdf"
+  }
+}
