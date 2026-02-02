@@ -6,5 +6,13 @@
   "dashboard": {
     "projectName": "job-search-dashboard",
     "passwordProtected": true
+  },
+  "notion": {
+    "apiKey": "YOUR_NOTION_API_KEY",
+    "databases": {
+      "jobs": "YOUR_JOBS_DATABASE_ID",
+      "contacts": "YOUR_CONTACTS_DATABASE_ID",
+      "tasks": "YOUR_TASKS_DATABASE_ID"
+    }
   }
 }
