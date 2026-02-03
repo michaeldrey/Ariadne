@@ -6,11 +6,167 @@ A Claude Code-powered job search management system. Read this file and `data/pro
 
 ## On Session Start
 
-When the user sends a greeting to start the session, respond with:
-1. A friendly, cute greeting in return
-2. A fun quote of the day (motivational, witty, or job-search relevant)
-3. The commands table below
-4. Current active roles and their status (read from `data/tracker.json`)
+When the user sends a greeting to start the session:
+
+1. Check if `data/profile.md` exists
+2. **If MISSING** → run the First-Run Setup Flow below
+3. **If EXISTS** → run the Normal Session Start
+
+### Normal Session Start
+
+1. Read `data/config.json` and check `notion.autoSync`
+2. **If `autoSync` is `true`:** kick off `node scripts/notion-sync.js` via Bash with `run_in_background: true` — don't wait for it
+3. Respond with:
+   - A friendly, cute greeting in return
+   - A fun quote of the day (motivational, witty, or job-search relevant)
+   - The commands table below
+   - Current active roles and their status (read from `data/tracker.json`)
+4. After displaying the greeting, check the background sync result:
+   - If it finished, show a one-line summary (e.g., "Notion sync: 2 pulled, 3 pushed, 40 unchanged")
+   - If it's still running, note "Notion sync running in background..." — no need to block
+   - If it errored, show the error briefly (e.g., "Notion sync failed: auth error")
+
+### First-Run Setup Flow
+
+This flow triggers when `data/profile.md` is missing, indicating a new user. Guide them through onboarding.
+
+**Step 0 — Dependency Check**
+
+Run `which` checks for required tools and report status:
+
+| Tool | Check | Required For | Install |
+|------|-------|-------------|---------|
+| node | `which node` | Dashboard build | nodejs.org |
+| npm | `which npm` | Package install | comes with node |
+| pandoc | `which pandoc` | Resume PDF generation | `brew install pandoc` |
+| weasyprint | `which weasyprint` | Resume PDF generation | `brew install weasyprint` |
+| wrangler | `which wrangler` | Dashboard deploy | `npm install -g wrangler` |
+| gemini | `which gemini` | Job search fallback | `npm install -g @google/gemini-cli` |
+
+Display results as a checklist:
+```
+Checking dependencies...
+  [x] node (v22.1.0)
+  [x] npm (v10.8.0)
+  [ ] pandoc — needed for PDF generation (brew install pandoc)
+  [ ] weasyprint — needed for PDF generation (brew install weasyprint)
+  [x] wrangler (v3.78.0)
+```
+
+- Missing tools: show install command, note which features won't work without them
+- Do NOT block setup — continue regardless, user can install later
+- If `npm` found but `node_modules/` missing in the project root, run `npm install` (the `marked` package is needed for dashboard builds)
+
+**Step 1 — Resume Collection**
+
+Ask the user using AskUserQuestion:
+- **Paste resume text** — save to scratchpad dir as `resume-input.txt`
+- **Provide file path** — validate it exists (handle PDF, DOCX, MD)
+- **Skip** — proceed without resume analysis
+
+**Step 2 — Launch Background Agent**
+
+If user provided a resume (text or file path):
+- Spawn the `resume-analyzer` agent via Task tool with `run_in_background: true`
+- Pass resume content or file path in the prompt
+- Continue immediately to Step 3 (don't wait)
+
+If user skipped, set a flag to skip pre-filling in Steps 5-6.
+
+**Step 3 — Identity (while agent runs)**
+
+Collect from the user:
+- **Full name** — used in profile.md and resume PDF filename
+- **Resume PDF filename** — suggest `[Name] Resume.pdf`, let them customize
+
+These are quick and don't depend on resume analysis.
+
+**Step 4 — Read Agent Results**
+
+If a background agent was launched in Step 2:
+- Check background agent output via TaskOutput (block briefly)
+- If not ready, wait and check again (up to ~30 seconds)
+- Parse the JSON from the agent's response
+- If timeout or failure, proceed with empty suggestions (manual entry)
+
+**Step 5 — Profile (pre-filled from agent)**
+
+Present the agent's inferred values and ask the user to accept, edit, or replace:
+- **Target roles** — e.g., "Developer Experience", "Platform Engineering"
+- **Background summary** — 2-3 sentence career arc
+- **Recent experience** — company, title, highlights
+
+If no agent results, ask the user to fill these in manually.
+
+Write `data/profile.md` using the template from `data.example/profile.md`, populated with collected values.
+
+**Step 6 — Search Criteria (pre-filled from agent)**
+
+Present the agent's inferred values section by section:
+- **Companies** (3 tiers) — user reviews and adjusts
+- **Role levels** — e.g., Senior, Staff, Director
+- **Location** — preference + keywords
+- **Compensation target** — range and notes
+- **Technical domains** — best fit + adjacent
+- **Background summary for criteria** — strengths and gaps
+
+If no agent results, ask the user to fill these in manually or accept the template defaults.
+
+Write `data/search-criteria.md` using the template from `data.example/search-criteria.md`, populated with collected values.
+
+**Step 7 — Job Search Backend Config**
+
+1. Ask using AskUserQuestion: "Do you have JobBot API credentials (endpoint + API key)?"
+   - If yes → collect endpoint URL + API key, set `searchBackend: "jobbot"` in config.json
+2. If no/skip → check if `gemini` CLI was found in Step 0
+   - If found → ask: "Gemini CLI is installed. Want to use it as your search backend?"
+   - If yes → set `searchBackend: "gemini"` in config.json
+3. If neither → set `searchBackend: null`, note that job search can be configured later
+
+Write `data/config.json` with the appropriate values.
+
+**Step 8 — Initialize data/ directory**
+
+Create the directory structure and write files:
+
+```bash
+mkdir -p data/InProgress data/Applied data/Rejected data/search-results
+```
+
+Write populated files from collected answers + accepted pre-fills:
+- `data/profile.md` (from Step 5)
+- `data/search-criteria.md` (from Step 6)
+- `data/config.json` (from Step 7)
+- `data/resume-content.md` — if user provided resume text, use it; otherwise copy template from `data.example/`
+
+Copy templates for files user will populate later:
+- `data/tracker.json` — empty structure: `{"active": [], "skipped": [], "closed": []}`
+- `data/network.json` — empty structure: `{"contacts": []}`
+- `data/tasks.json` — empty structure: `{"tasks": []}`
+- `data/work-stories.md` — copy template from `data.example/`
+
+**Important:** If `data/` already exists but `profile.md` is missing (partial setup), preserve any existing tracker.json, network.json, and tasks.json — only write files that don't already exist.
+
+**Step 9 — Welcome + Optional Enhancements**
+
+- Confirm setup complete, list all created files
+- If any dependencies were missing in Step 0, remind the user with install commands
+- Show the normal commands table (from the table below)
+- Show a fun quote of the day
+- Note: `work-stories.md` is a template — user populates with their interview stories later
+- Show brief "Optional Enhancements" section:
+  ```
+  Optional enhancements you can set up later:
+  - Chrome Extension — Extract job descriptions directly from open browser tabs
+  - Firecrawl MCP — Fetch and parse job posting URLs automatically
+  - Cloudflare Pages — Deploy your status dashboard for access from any device
+  - Notion Sync — Bidirectional sync of jobs, contacts, and tasks to Notion (see docs/notion-sync.md)
+  ```
+
+**Edge cases:**
+- `data/` exists but `profile.md` missing → partial setup, preserve existing tracker/network/tasks
+- Resume analyzer timeout → proceed with manual entry, no pre-fills
+- Invalid file path → offer to paste text instead
 
 | Command | Action |
 |---------|--------|
@@ -23,6 +179,7 @@ When the user sends a greeting to start the session, respond with:
 | `"Re-compare [Company]"` | Validate improvements against new PDF |
 | `"Status"` | Read data/tracker.json and display formatted status |
 | `"Reconcile"` | Compare data/tracker.json to folders, report/fix drift |
+| `"Open dashboard"` | Build and open status dashboard locally |
 | `"Deploy dashboard"` | Build and deploy status page to Cloudflare Pages |
 | `"Add contact [Name] at [Company]"` | Add new contact to data/network.json |
 | `"Log interaction with [Name]"` | Record interaction (call, email, meeting) with contact |
@@ -31,6 +188,7 @@ When the user sends a greeting to start the session, respond with:
 | `"Tasks"` | Display pending tasks from tasks.json |
 | `"Contacts"` | Display contacts from network.json |
 | `"Research packet for [Company]"` | Generate interview research packet (hiring manager, company, culture, story map) |
+| `"Sync to Notion"` | Bidirectional incremental sync of jobs, contacts, and tasks to Notion (optional) |
 
 ## Quick Reference
 
@@ -41,7 +199,7 @@ When the user sends a greeting to start the session, respond with:
 - `data/Rejected/` - Closed opportunities
 - `data/search-results/` - Search outputs (jobbot-results.json)
 - `/status-page/` - Cloudflare Pages dashboard (build.js, dist/)
-- `/.claude/agents/` - Subagent configuration files (`jd-resume-compare.md`, `interview-research.md`)
+- `/.claude/agents/` - Subagent configuration files (`jd-resume-compare.md`, `interview-research.md`, `resume-analyzer.md`)
 
 **Key Files:**
 - `data/tracker.json` - Job tracker (source of truth for job status) — see schema below
@@ -52,6 +210,7 @@ When the user sends a greeting to start the session, respond with:
 - `resume.css` - Stylesheet for PDF generation (pandoc + weasyprint)
 - `notes-template.md` - Template for role-specific tracking
 - `data/config.json` - JobBot API endpoint and key (gitignored)
+- `data/.notion-sync-map.json` - Notion sync state (gitignored, auto-generated)
 - `data/search-results/jobbot-results.json` - Latest job search output
 - `README.md` - Full documentation
 
@@ -205,9 +364,16 @@ When the user sends a greeting to start the session, respond with:
 
 ## Commands
 
-### Job Search (JobBot API)
+### Job Search
 
 When user says `"Run job search"`:
+
+**Step 0: Determine search backend**
+
+Read `data/config.json` and check the `searchBackend` field:
+- `"jobbot"` (or has jobbot credentials with valid endpoint/apiKey) → use JobBot API (Steps 1-6 below)
+- `"gemini"` → use Gemini CLI (see Gemini Search Flow below)
+- `null` or missing → tell user: "Job search not configured. Run setup or edit `data/config.json`."
 
 **Step 1: Load search criteria and config**
 
@@ -302,9 +468,28 @@ Write raw API response to `data/search-results/jobbot-results.json` for referenc
 
 **Fallback:** If JobBot API fails (network error, auth failure):
 1. Log the error
-2. Offer options: retry, use direct ATS API calls via Bash, or fall back to Gemini CLI
+2. Check if `gemini` CLI is available (`which gemini`)
+3. If available, offer: retry JobBot, or fall back to Gemini CLI
+4. If not available, offer: retry, or use direct ATS API calls via Bash
 
 **Why JobBot?** It scrapes real ATS APIs (Greenhouse, Lever, Ashby, Workday) directly — no hallucinated job postings. URLs are guaranteed to exist.
+
+#### Gemini Search Flow
+
+When `searchBackend` is `"gemini"` or when falling back from JobBot:
+
+1. Read `prompts/gemini-search-prompt.md`
+2. Read `data/search-criteria.md` for current criteria
+3. Replace `{{SEARCH_CRITERIA}}` in the prompt template with the search criteria content
+4. Run via Gemini CLI:
+   ```bash
+   echo "$PROMPT" | gemini
+   ```
+5. Save the output to `data/search-results/gemini-results.md`
+6. Parse and display results in the same numbered table format as JobBot
+7. After displaying, remind user: **Setup #N** to pursue, **Skip #N** to filter out
+
+**Note:** Gemini results are LLM-generated and may include stale or inaccurate URLs. Always verify links before applying.
 
 ### Setup Command
 
@@ -440,26 +625,36 @@ When user says `"Status"`:
 
 **Read data/tracker.json only** — no folder scanning.
 
+**Default (compact) format** — optimized for speed. Use `"Status full"` for the complete view.
+
 **Display format:**
 
 ```
-## Active Roles (3)
+## Interviews (2)
 
 | Company | Role | Stage | Next Action | Updated |
 |---------|------|-------|-------------|---------|
-| Stripe | DevEx Lead | Phone Screen | Prep behavioral stories | Jan 24 |
-| Vercel | Platform Director | Applied | Waiting to hear back | Jan 18 |
-| Notion | Eng Manager | Sourced | Compare JD and resume | Jan 25 |
+| GitHub | Director of DevEx | Phone Screen | Awaiting loop decision (~Feb 6) | Jan 30 |
+| Coinbase | SEM Finhub Platform | Phone Screen | Recruiter screen Feb 2 | Jan 30 |
 
-## Recently Closed (2)
+## Applied (5)
 
-| Company | Role | Outcome | Closed |
-|---------|------|---------|--------|
-| Databricks | DevEx Manager | Rejected | Jan 21 |
-| Figma | Platform Lead | Withdrew | Jan 19 |
+Airbnb · Databricks (×2) · Dropbox · Oracle · Atlassian · NVIDIA (×2)
 
-## Skipped: 5 roles
+## Sourced (15)
+
+Discord · Cloudflare · Upstart · LocalStack · Adobe · Patreon · Yahoo · +8 more
+
+## Closed: 20 · Skipped: 13
 ```
+
+**Rules:**
+- **Interviews** (Phone Screen and above): full detail table — these are highest priority
+- **Applied**: compact one-liner listing company names, group duplicates with (×N)
+- **Sourced**: compact one-liner, show most recent first, truncate with "+N more" if >7
+- **Closed/Skipped**: counts only
+
+**`"Status full"`** — shows the complete expanded view with all tables (Applied detail, Sourced detail, Closed table, Skipped list). Use the old full-table format for all sections.
 
 ### Compare Command
 
@@ -516,6 +711,7 @@ weasyprint resume.html "[Name] Resume.pdf"  # Name from data/profile.md
 | `"Re-compare [Company]"` | Re-run comparison to validate improvements |
 | `"Status"` | Read data/tracker.json → display formatted status |
 | `"Reconcile"` | Compare data/tracker.json to folders → report/fix drift |
+| `"Open dashboard"` | Build and open status dashboard locally |
 | `"Deploy dashboard"` | Build status page → deploy to Cloudflare Pages |
 | `"Add contact [Name] at [Company]"` | Create contact in network.json |
 | `"Log interaction with [Name]"` | Record interaction + optional follow-up task |
@@ -524,6 +720,37 @@ weasyprint resume.html "[Name] Resume.pdf"  # Name from data/profile.md
 | `"Tasks"` | Display pending tasks |
 | `"Contacts"` | Display contacts with recent interactions |
 | `"Research packet for [Company]"` | Prerequisite check → `interview-research` agent → research-packet.md |
+| `"Sync to Notion"` | Bidirectional incremental sync → pull then push → local wins conflicts |
+
+### Notion Sync Command (Optional)
+
+When user says `"Sync to Notion"`:
+
+**Prerequisite:** Requires `notion` config in `data/config.json` with `apiKey` and `databases` (jobs, contacts, tasks). See `docs/notion-sync.md` for setup.
+
+If config is missing or incomplete, tell the user: "Notion sync is not configured. See docs/notion-sync.md for setup instructions."
+
+If configured, run:
+
+```bash
+node scripts/notion-sync.js
+```
+
+**Available flags (pass through when user specifies):**
+- `--dry-run` — preview changes only
+- `--pull-only` — only pull Notion → local
+- `--push-only` — only push local → Notion
+- `--full` — ignore hashes/timestamps, sync everything
+- `--apply-deletes` — archive Notion pages for locally-deleted items
+
+**How it works:**
+1. Ensures database schemas (creates missing properties)
+2. **Pull:** Queries Notion for pages changed since last sync, applies to local JSON files
+3. **Push:** Hashes each local item, skips unchanged, creates/updates in Notion
+4. Local wins on conflicts (both sides changed same item)
+5. First run is baseline mode — records mappings without overwriting local data
+
+**Sync map:** State is stored in `data/.notion-sync-map.json` (auto-generated, gitignored). Tracks Notion page IDs, content hashes, and timestamps for incremental sync. Auto-migrates from Phase 1 flat format.
 
 ### Research Packet Command
 
@@ -559,6 +786,16 @@ When user says `"Research packet for [Company]"` or `"Prep research for [Company
 - Prioritized reading/watching list with URLs
 - Questions to ask the interviewer
 - Printable quick reference card
+
+### Open Dashboard Command
+
+When user says `"Open dashboard"`:
+
+```bash
+cd status-page && node build.js && open dist/index.html
+```
+
+Always rebuilds before opening (build is fast). Uses `open` on macOS, `xdg-open` on Linux.
 
 ### Deploy Dashboard Command
 

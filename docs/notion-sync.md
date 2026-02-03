@@ -1,13 +1,17 @@
 # Notion Sync
 
-Sync your Ariadne job search data to Notion for access from anywhere.
+Bidirectional incremental sync between your Ariadne job search data and Notion databases.
 
 ## Overview
 
-The Notion sync feature provides **one-way synchronization** from your local Ariadne files to Notion databases. Your local files (`tracker.json`, `network.json`, `tasks.json`) remain the source of truth — changes you make locally get pushed to Notion.
+The Notion sync provides **bidirectional synchronization** between your local Ariadne files and Notion databases. Pull-then-push flow with local-wins conflict resolution.
 
-**Phase 1 (current):** Local → Notion (write only)  
-**Phase 2 (planned):** Bidirectional sync
+- **Pull:** Notion changes (new items, edits) are applied to local JSON files
+- **Push:** Local changes are pushed to Notion, skipping unchanged items via content hashing
+- **Conflicts:** When both sides change the same item, local wins
+- **First sync:** Baseline mode — records mappings and timestamps without overwriting local data
+
+Typical API usage: ~6 calls when nothing changed, full bidirectional sync only touches changed items.
 
 ## Setup
 
@@ -20,15 +24,15 @@ The Notion sync feature provides **one-way synchronization** from your local Ari
 
 ### 2. Create Databases in Notion
 
-Create three databases in Notion with these properties:
+Create three databases in Notion. The sync script will automatically create missing properties and rename the default title column, but here's the expected schema for reference:
 
 **Jobs Database:**
 - Role (title)
 - Company (text)
 - Status (select: Active, Skipped, Closed)
-- Stage (select: Sourced, Applied, Phone Screen, Technical, Onsite, Offer, Negotiation)
+- Stage (select: Sourced, Applied, Phone Screen, Technical, Onsite, Offer, Negotiating)
 - Next Action (text)
-- Outcome (select: Rejected, Withdrew, Offer Declined, Accepted, Ghosted)
+- Outcome (select: Rejected, Withdrew, Accepted, Expired)
 - Skip Reason (text)
 - URL (url)
 - Added (date)
@@ -48,8 +52,8 @@ Create three databases in Notion with these properties:
 
 **Tasks Database:**
 - Task (title)
+- Done (checkbox)
 - Due (date)
-- Status (select: Pending, Done)
 - Created (date)
 
 ### 3. Share Databases with Integration
@@ -88,15 +92,38 @@ Add to your `data/config.json`:
 
 ## Usage
 
-### Manual Sync
+### CLI Flags
 
 ```bash
-# Preview what would be synced (no changes made)
+# Preview what would happen (no changes made)
 node scripts/notion-sync.js --dry-run
 
-# Run actual sync
+# Full bidirectional sync (default)
 node scripts/notion-sync.js
+
+# Only pull changes from Notion to local files
+node scripts/notion-sync.js --pull-only
+
+# Only push local changes to Notion (incremental)
+node scripts/notion-sync.js --push-only
+
+# Ignore hashes/timestamps, sync everything
+node scripts/notion-sync.js --full
+
+# Archive Notion pages for locally-deleted items
+node scripts/notion-sync.js --apply-deletes
+
+# Combine flags
+node scripts/notion-sync.js --pull-only --dry-run
 ```
+
+| Flag | Behavior |
+|------|----------|
+| `--dry-run` | Preview changes without modifying anything |
+| `--pull-only` | Only pull Notion → local |
+| `--push-only` | Only push local → Notion (incremental) |
+| `--full` | Ignore hashes/timestamps, sync everything |
+| `--apply-deletes` | Archive Notion pages for locally-deleted items |
 
 ### Via Claude Code
 
@@ -104,29 +131,117 @@ node scripts/notion-sync.js
 "Sync to Notion"
 ```
 
-The sync script will:
-1. Read your local JSON files
-2. Compare with existing Notion pages (via sync map)
-3. Create new pages or update existing ones
-4. Save the ID mapping for future syncs
-
-### Sync Mapping
-
-The script maintains a mapping file at `data/.notion-sync-map.json` that tracks which local items correspond to which Notion pages. This allows updates to work correctly without creating duplicates.
-
 ## How It Works
 
-1. **Jobs:** All entries from `tracker.json` (active, skipped, closed) are synced with their current status
-2. **Contacts:** All entries from `network.json` are synced; interaction history is flattened into the Notes field
-3. **Tasks:** All entries from `tasks.json` are synced with their completion status
+### Sync Algorithm
 
-The sync respects Notion's rate limits (~3 requests/second) to avoid API errors.
+```
+1. Ensure database schemas (3 API calls)
+2. PULL (if not --push-only):
+   a. Query each Notion DB for pages edited since last sync
+   b. For each changed page:
+      - Known item + only Notion changed → update local file
+      - Known item + both changed → skip (local wins, push will overwrite)
+      - Unknown page → add to local data
+   c. Write updated local JSON files
+3. PUSH (if not --pull-only):
+   a. For each local item, compute SHA-256 hash and compare to sync map
+   b. Skip items where hash matches (no local change)
+   c. Create or update changed items in Notion
+   d. Detect locally-deleted items, warn or archive
+4. Update lastSyncTime, save sync map
+```
 
-## Limitations
+### Change Detection
 
-- **One-way sync only (Phase 1):** Changes made in Notion are NOT synced back to local files
-- **No relation linking:** Jobs↔Contacts↔Tasks relations aren't synced (they exist only in Notion)
-- **Interaction history:** Contact interactions are flattened to text notes, not individual records
+- **Local changes:** SHA-256 hash of each item's sorted JSON, stored in the sync map. If the hash matches, the item is skipped during push.
+- **Notion changes:** `last_edited_time` timestamp filter on database queries. Only pages edited after `lastSyncTime` are fetched.
+
+### Conflict Resolution
+
+When both local and Notion have changed the same item since the last sync:
+- **Local wins** — the local version is pushed to Notion
+- The pull phase detects the conflict and skips the Notion update
+- The push phase then overwrites Notion with the local version
+
+### First Sync (Baseline)
+
+On the first run (no `lastSyncTime` in sync map):
+1. Fetches all pages from each Notion database
+2. Records `notionLastEdited` timestamps for existing items
+3. Does NOT overwrite local data or add new items from Notion
+4. Performs a full push to populate all `localHash` values
+5. Sets `lastSyncTime` for subsequent incremental syncs
+
+This ensures existing data isn't accidentally overwritten during upgrade from one-way sync.
+
+### Sync Map Migration
+
+If you're upgrading from the Phase 1 one-way sync, the old flat sync map format:
+```json
+{ "jobs": { "Active:Stripe:DevEx Lead": "page-id-123" } }
+```
+
+Is automatically migrated to the enriched format:
+```json
+{
+  "lastSyncTime": null,
+  "jobs": {
+    "Active:Stripe:DevEx Lead": {
+      "notionId": "page-id-123",
+      "localHash": null,
+      "notionLastEdited": null
+    }
+  },
+  "notionToLocal": {
+    "page-id-123": { "type": "jobs", "key": "Active:Stripe:DevEx Lead" }
+  }
+}
+```
+
+The migration happens automatically on first run. The baseline sync then populates the hash and timestamp fields.
+
+### Deletions
+
+When an item exists in the sync map but not in local data:
+- **Default:** Warns with a list of orphaned items
+- **With `--apply-deletes`:** Archives the corresponding Notion pages and removes them from the sync map
+
+### Contact Interactions
+
+Contact interactions are synced via the Notes field in Notion using the format:
+```
+[2026-01-26] email: Sent resume for Health AI role
+[2026-01-28] call: Discussed referral process
+```
+
+- **Push:** All local interactions are flattened to Notes (truncated at 2000 chars)
+- **Pull:** New interaction lines in Notes are parsed and appended to local data (append-only merge, never overwrites existing interactions)
+- Only complete `[date] type: summary` lines are parsed; truncated lines are safely ignored
+
+### Job Status Changes in Notion
+
+When a job's Status is changed in Notion (e.g., Active → Closed):
+- The reverse map (`notionToLocal`) resolves the page ID to the old local key
+- The job is moved between tracker arrays (active/skipped/closed)
+- Physical folders are moved if the stage implies a directory change (InProgress → Applied → Rejected)
+- The sync map keys are updated to match the new status
+
+### Rate Limiting
+
+- Requests are spaced 350ms apart to stay under Notion's rate limit
+- 429 responses trigger automatic retry with exponential backoff (up to 3 retries)
+- The `Retry-After` header is respected when present
+
+### Pagination
+
+Notion databases with more than 100 items are automatically paginated using `start_cursor`.
+
+## Entity Sync Details
+
+1. **Jobs:** All entries from `tracker.json` (active, skipped, closed) are synced with their current status and stage
+2. **Contacts:** All entries from `network.json` are synced; interaction history is flattened into the Notes field (pulled back via append-only merge)
+3. **Tasks:** All entries from `tasks.json` are synced with their completion status (Done checkbox maps to pending/completed)
 
 ## Security Notes
 

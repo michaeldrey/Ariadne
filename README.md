@@ -173,28 +173,30 @@ Generates a web-based dashboard showing your pipeline funnel, active roles, task
 
 ### Requirements
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) with Chrome extension
-- JobBot API credentials (configured in `data/config.json`)
-- [pandoc](https://pandoc.org/) + [weasyprint](https://weasyprint.org/) for PDF generation
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- Optional: [pandoc](https://pandoc.org/) + [weasyprint](https://weasyprint.org/) for PDF generation
+- Optional: JobBot API credentials or [Gemini CLI](https://github.com/google/gemini-cli) for job search
+- Optional: [Notion API key](https://notion.so/my-integrations) for bidirectional sync
 
 ### Installation
 
 1. Clone this repository
-2. Run the initialization script:
-   ```bash
-   ./init.sh
-   ```
-3. Customize your data files:
-   - `data/profile.md` — Your name and background
-   - `data/resume-content.md` — Your master resume
-   - `data/work-stories.md` — Interview stories by theme
-   - `data/search-criteria.md` — Job search preferences
+2. Start Claude Code in the project directory
+3. Say hello — Ariadne will detect first run and walk you through setup
+
+The interactive setup will:
+- Check your system for required dependencies
+- Analyze your resume to pre-fill profile and search criteria
+- Collect your preferences and configure your search backend
+- Initialize all data files automatically
 
 Your `data/` directory is gitignored — your personal information stays private.
 
+**Alternative:** For a non-interactive setup, run `./init.sh` and manually edit the template files in `data/`.
+
 ### First Session
 
-Start Claude Code in the project directory. Ariadne reads `CLAUDE.md` automatically and greets you with available commands and your current pipeline status.
+On first run, Ariadne walks you through onboarding. On subsequent sessions, it greets you with available commands and your current pipeline status.
 
 ```
 > Good morning
@@ -227,7 +229,43 @@ Good morning! Here's your job search status...
 | `"Add task [description]"` | Create a to-do |
 | `"Tasks"` | View pending tasks |
 | `"Complete task #N"` | Mark done |
+| `"Open dashboard"` | Build and open status dashboard locally |
 | `"Deploy dashboard"` | Build and deploy status page |
+| `"Sync to Notion"` | Bidirectional sync jobs, contacts, and tasks to Notion |
+
+---
+
+## Optional: Notion Sync
+
+Ariadne can sync your jobs, contacts, and tasks to Notion for access from any device. This is fully optional — local files remain the source of truth.
+
+```
+"Sync to Notion"
+```
+
+**Features:**
+- Bidirectional incremental sync (pull-then-push)
+- Content hashing skips unchanged items (~6 API calls when nothing changed)
+- Local wins on conflicts
+- Append-only merge for contact interactions
+- Auto-migrates from one-way sync format
+
+**Auto-sync on session start:** Set `"autoSync": true` in your Notion config to sync automatically when you start a session. Runs in the background — doesn't delay your greeting.
+
+```json
+// data/config.json
+{
+  "notion": {
+    "apiKey": "ntn_...",
+    "databases": { "jobs": "...", "contacts": "...", "tasks": "..." },
+    "autoSync": true
+  }
+}
+```
+
+**Flags (manual runs):** `--dry-run`, `--pull-only`, `--push-only`, `--full`, `--apply-deletes`
+
+See [docs/notion-sync.md](docs/notion-sync.md) for setup and full documentation.
 
 ---
 
@@ -248,6 +286,10 @@ ariadne/
 │   ├── Applied/              # Submitted applications
 │   └── Rejected/             # Closed opportunities
 ├── data.example/             # Templates for new users
+├── scripts/                  # Automation scripts
+│   └── notion-sync.js        # Bidirectional Notion sync (optional)
+├── docs/                     # Additional documentation
+│   └── notion-sync.md        # Notion sync setup and usage
 ├── prompts/                  # Search and analysis prompts
 ├── status-page/              # Dashboard generator
 ├── resume.css                # PDF stylesheet

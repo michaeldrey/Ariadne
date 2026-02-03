@@ -1,4 +1,5 @@
 {
+  "searchBackend": null,
   "jobbot": {
     "endpoint": "https://jobsearch-YOUR_HASH-uc.a.run.app",
     "apiKey": "YOUR_ARIADNE_API_KEY"
@@ -13,6 +14,7 @@
       "jobs": "YOUR_JOBS_DATABASE_ID",
       "contacts": "YOUR_CONTACTS_DATABASE_ID",
       "tasks": "YOUR_TASKS_DATABASE_ID"
-    }
+    },
+    "autoSync": false
   }
 }
