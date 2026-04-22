@@ -211,6 +211,7 @@ pub struct RoleArtifactsImportResult {
     pub jd_updates: i32,
     pub notes_updates: i32,
     pub unmatched: Vec<String>,
+    pub profile_files_imported: Vec<String>,
 }
 
 #[tauri::command]
@@ -364,13 +365,62 @@ pub fn import_role_artifacts(
 
     unmatched.sort();
 
+    // Import top-level profile content files (only if the target setting is empty,
+    // so we don't clobber anything the user already edited in-app).
+    let profile_files_imported =
+        import_profile_files(&conn, &base).map_err(|e| e.to_string())?;
+
     Ok(RoleArtifactsImportResult {
         matched,
         artifacts_created,
         jd_updates,
         notes_updates,
         unmatched,
+        profile_files_imported,
     })
+}
+
+fn import_profile_files(
+    conn: &rusqlite::Connection,
+    base: &std::path::Path,
+) -> rusqlite::Result<Vec<String>> {
+    // (filename, settings column). Each is imported only if the column is
+    // currently NULL or empty.
+    let files: &[(&str, &str)] = &[
+        ("resume-content.md", "resume_content"),
+        ("work-stories.md", "work_stories"),
+        ("profile.md", "profile_json"),
+        ("search-criteria.md", "search_criteria"),
+    ];
+
+    let mut imported = Vec::new();
+
+    for (filename, column) in files {
+        let file_path = base.join(filename);
+        if !file_path.is_file() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&file_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        // Only overwrite if the current value is NULL or empty.
+        let sql = format!(
+            "UPDATE settings SET {0} = ?1, updated_at = datetime('now')
+             WHERE id = 1 AND ({0} IS NULL OR {0} = '')",
+            column
+        );
+        let rows = conn.execute(&sql, params![content])?;
+        if rows > 0 {
+            imported.push((*filename).to_string());
+        }
+    }
+
+    Ok(imported)
 }
 
 /// Lowercase + keep only alphanumerics + collapse whitespace.

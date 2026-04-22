@@ -8,7 +8,8 @@ pub fn get_settings(db: State<Database>) -> Result<Settings, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.query_row(
         "SELECT anthropic_api_key, jobbot_endpoint, jobbot_api_key, search_backend,
-                resume_content, work_stories, profile_name, profile_json, resume_filename
+                resume_content, work_stories, profile_name, profile_json,
+                search_criteria, resume_filename
          FROM settings WHERE id = 1",
         [],
         |row| {
@@ -21,7 +22,8 @@ pub fn get_settings(db: State<Database>) -> Result<Settings, String> {
                 work_stories: row.get(5)?,
                 profile_name: row.get(6)?,
                 profile_json: row.get(7)?,
-                resume_filename: row.get::<_, Option<String>>(8)?.unwrap_or_else(|| "Resume.pdf".into()),
+                search_criteria: row.get(8)?,
+                resume_filename: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "Resume.pdf".into()),
             })
         },
     )
@@ -40,6 +42,7 @@ pub fn update_settings(db: State<Database>, data: UpdateSettings) -> Result<Sett
     if let Some(ref v) = data.work_stories { conn.execute("UPDATE settings SET work_stories = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
     if let Some(ref v) = data.profile_name { conn.execute("UPDATE settings SET profile_name = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
     if let Some(ref v) = data.profile_json { conn.execute("UPDATE settings SET profile_json = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
+    if let Some(ref v) = data.search_criteria { conn.execute("UPDATE settings SET search_criteria = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
     if let Some(ref v) = data.resume_filename { conn.execute("UPDATE settings SET resume_filename = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
 
     drop(conn);

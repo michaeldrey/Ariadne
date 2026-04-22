@@ -80,7 +80,18 @@ export async function renderSettings(container) {
         <label>Resume PDF Filename</label>
         <input type="text" id="resume-filename" value="${escapeHtml(settings.resume_filename) || 'Resume.pdf'}" placeholder="Resume.pdf" />
       </div>
+      <div class="form-group">
+        <label>Profile (markdown)</label>
+        <textarea id="profile-md" placeholder="Background, target roles, compensation goals…" style="min-height:140px">${escapeHtml(settings.profile_json) || ''}</textarea>
+      </div>
       <button class="btn btn-sm btn-primary" id="btn-save-profile">Save Profile</button>
+    </div>
+
+    <div class="card mb-16">
+      <h3>Search Criteria</h3>
+      <p class="text-muted text-sm mb-8">Used by Claude when helping you evaluate roles or search.</p>
+      <textarea id="search-criteria" placeholder="Target companies, excluded companies, must-haves, dealbreakers…" style="min-height:160px">${escapeHtml(settings.search_criteria) || ''}</textarea>
+      <button class="btn btn-sm btn-primary mt-16" id="btn-save-search-criteria">Save Search Criteria</button>
     </div>
 
     <div class="card mb-16">
@@ -107,8 +118,8 @@ export async function renderSettings(container) {
         <button class="btn btn-sm" id="btn-import-contacts">Import network.json</button>
         <button class="btn btn-sm" id="btn-import-tasks">Import tasks.json</button>
       </div>
-      <p class="text-muted text-sm mb-8 mt-16">Import per-role JDs, resume drafts, analyses, and notes from your Ariadne2 role folders (<code>data/Applied</code>, <code>data/Closed</code>, etc.).</p>
-      <button class="btn btn-sm" id="btn-import-role-folders">Import role folders</button>
+      <p class="text-muted text-sm mb-8 mt-16">Import from Ariadne2 — per-role JDs / resume drafts / analyses / notes from role folders, plus top-level resume, work stories, profile, and search criteria. Safe to re-run.</p>
+      <button class="btn btn-sm" id="btn-import-role-folders">Import from Ariadne2</button>
     </div>
   `;
 
@@ -151,9 +162,18 @@ export async function renderSettings(container) {
         data: {
           profile_name: document.getElementById('profile-name').value || null,
           resume_filename: document.getElementById('resume-filename').value || null,
+          profile_json: document.getElementById('profile-md').value || null,
         }
       });
       toast('Profile saved', 'success');
+    } catch (err) { toast(err.toString(), 'error'); }
+  });
+
+  // Save search criteria
+  document.getElementById('btn-save-search-criteria').addEventListener('click', async () => {
+    try {
+      await invoke('update_settings', { data: { search_criteria: document.getElementById('search-criteria').value || null } });
+      toast('Search criteria saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
@@ -193,13 +213,16 @@ export async function renderSettings(container) {
 
 function showRoleFoldersImportModal() {
   showModal(`
-    <h3>Import Role Folders</h3>
+    <h3>Import from Ariadne2</h3>
     <p class="text-sm text-muted mb-16">
-      Reads per-role JDs, resume drafts, analyses, research packets, and notes from
-      <code>&lt;base&gt;/Applied</code>, <code>&lt;base&gt;/Closed</code>,
-      <code>&lt;base&gt;/InProgress</code>, <code>&lt;base&gt;/Rejected</code>.
-      Matches folders to existing roles by <code>"Company - Title"</code> folder names.
-      Safe to re-run — duplicate artifacts are skipped.
+      Pulls everything from an Ariadne2 data directory:
+      <br>• Per-role JDs / resume drafts / analyses / research / notes from
+      <code>Applied</code>, <code>Closed</code>, <code>InProgress</code>,
+      <code>Rejected</code> folders (matched by <code>"Company - Title"</code>).
+      <br>• Top-level <code>resume-content.md</code>, <code>work-stories.md</code>,
+      <code>profile.md</code>, <code>search-criteria.md</code> into Settings fields
+      (only if currently empty).
+      <br>Safe to re-run — nothing is overwritten or duplicated.
     </p>
     <div class="form-group">
       <label>Base directory</label>
@@ -224,15 +247,19 @@ function showRoleFoldersImportModal() {
       const unmatchedList = r.unmatched.length > 0
         ? `<details class="mt-8"><summary class="text-muted">${r.unmatched.length} unmatched folders (click to expand)</summary><pre style="font-size:11px;color:var(--text-muted);white-space:pre-wrap;margin-top:8px">${r.unmatched.map(u => escapeHtml(u)).join('\n')}</pre></details>`
         : '';
+      const profileList = (r.profile_files_imported || []).length > 0
+        ? `<p><strong>${r.profile_files_imported.length}</strong> profile files imported: ${r.profile_files_imported.map(f => `<code>${escapeHtml(f)}</code>`).join(', ')}.</p>`
+        : `<p class="text-muted">No new profile files imported (either missing from the base dir, or the target fields are already filled).</p>`;
       resultEl.innerHTML = `
         <div class="card">
           <p><strong>${r.matched}</strong> role folders matched.</p>
           <p><strong>${r.artifacts_created}</strong> artifacts (resume/analysis/research) imported.</p>
           <p><strong>${r.jd_updates}</strong> JDs set, <strong>${r.notes_updates}</strong> notes set (only on previously-empty fields).</p>
+          ${profileList}
           ${unmatchedList}
         </div>
       `;
-      toast(`Imported ${r.artifacts_created} artifacts from ${r.matched} roles`, 'success');
+      toast(`Imported ${r.artifacts_created} artifacts + ${(r.profile_files_imported || []).length} profile files`, 'success');
     } catch (err) {
       resultEl.innerHTML = `<p style="color:var(--red)">${escapeHtml(err.toString())}</p>`;
       toast(err.toString(), 'error');

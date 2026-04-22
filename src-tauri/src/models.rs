@@ -164,6 +164,7 @@ pub struct Settings {
     pub work_stories: Option<String>,
     pub profile_name: Option<String>,
     pub profile_json: Option<String>,
+    pub search_criteria: Option<String>,
     pub resume_filename: String,
 }
 
@@ -177,6 +178,7 @@ pub struct UpdateSettings {
     pub work_stories: Option<String>,
     pub profile_name: Option<String>,
     pub profile_json: Option<String>,
+    pub search_criteria: Option<String>,
     pub resume_filename: Option<String>,
 }
 

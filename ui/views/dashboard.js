@@ -195,12 +195,24 @@ function sortHeader(key, label) {
 function sortRows(rows, key, dir) {
   const mult = dir === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => {
-    const av = a[key], bv = b[key];
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
-    return String(av).localeCompare(String(bv)) * mult;
+    let cmp;
+    if (key === 'stage') {
+      // Pipeline order, not alphabetical. Unknown stages sink to the end.
+      const ai = STAGES.indexOf(a.stage);
+      const bi = STAGES.indexOf(b.stage);
+      const aIdx = ai === -1 ? STAGES.length : ai;
+      const bIdx = bi === -1 ? STAGES.length : bi;
+      cmp = aIdx - bIdx;
+    } else {
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) cmp = 0;
+      else if (av == null) cmp = 1;
+      else if (bv == null) cmp = -1;
+      else if (typeof av === 'number' && typeof bv === 'number') cmp = av - bv;
+      else cmp = String(av).localeCompare(String(bv));
+    }
+    if (cmp !== 0) return cmp * mult;
+    return String(a.company || '').localeCompare(String(b.company || ''));
   });
 }
 

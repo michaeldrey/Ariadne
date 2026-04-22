@@ -22,5 +22,19 @@ Thumbs.db
 src-tauri/gen/
 src-tauri/icons/
 
-# Data (user-specific, will be in app data dir)
+# Data (user-specific, lives in app data dir — never in repo)
 *.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Personal content files — if copied into the repo by accident, ignore them.
+/data/
+resume-content.md
+work-stories.md
+profile.md
+search-criteria.md
+tracker.json
+network.json
+tasks.json

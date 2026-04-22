@@ -157,5 +157,16 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current < 3 {
+        // v3: profile content fields imported from Ariadne2 top-level files.
+        // profile_md reuses the existing profile_json column; search_criteria is new.
+        conn.execute_batch(
+            "
+            ALTER TABLE settings ADD COLUMN search_criteria TEXT;
+            PRAGMA user_version = 3;
+            ",
+        )?;
+    }
+
     Ok(())
 }
