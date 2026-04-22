@@ -68,7 +68,7 @@ export async function renderSearch(container) {
 
 Skip anything that's obviously stale, posted on LinkedIn (the URL won't work), or behind a login wall. Order by best-fit first.`;
     try {
-      await openProfileChatAndSend(prompt);
+      await openProfileChatAndSend(prompt, 'jobsearch');
     } catch (err) {
       toast(err.toString(), 'error');
     } finally {

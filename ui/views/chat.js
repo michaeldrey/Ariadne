@@ -19,12 +19,12 @@ export async function openChatAndSend(role, text) {
   return sendAfterOpen(text);
 }
 
-export async function openProfileChat() {
-  return openScope({ type: 'profile' });
+export async function openProfileChat(context = 'general') {
+  return openScope({ type: 'profile', context });
 }
 
-export async function openProfileChatAndSend(text) {
-  await openProfileChat();
+export async function openProfileChatAndSend(text, context = 'general') {
+  await openProfileChat(context);
   return sendAfterOpen(text);
 }
 
@@ -99,22 +99,48 @@ async function loadConversations() {
   currentConversations = await invoke('list_conversations', { scopeType, roleId });
 }
 
+// Suggested prompt chips shown under the input. Driven by the scope + the
+// opener's declared `context` so the chat that opens from Job Search shows
+// search-oriented prompts, while the generic Profile Coach shows onboarding
+// and resume prompts.
+function chipsForScope(scope) {
+  if (scope.type === 'role') {
+    return [
+      { label: 'Tailor resume', prompt: 'Tailor my resume for this role.' },
+      { label: 'Research company', prompt: 'Generate a research packet for this company and role.' },
+      { label: 'Draft outreach', prompt: 'Draft an intro message I could send to a hiring manager or recruiter for this role.' },
+    ];
+  }
+  switch (scope.context) {
+    case 'jobsearch':
+      return [
+        { label: 'Search for jobs', prompt: 'Use my search criteria to find 5-10 open roles on the public web. Include direct URLs.' },
+        { label: 'Update preferred companies', prompt: 'Help me tune my list of target companies — which should I add, which should I drop based on my criteria?' },
+        { label: 'Refine criteria', prompt: 'Help me clarify my search criteria — level, comp, must-haves, dealbreakers.' },
+        { label: 'Add exclusions', prompt: 'Which companies should I exclude based on my criteria? Update the exclusion list.' },
+      ];
+    case 'interview':
+      return [
+        { label: 'Practice behavioral', prompt: 'Interview me with behavioral questions based on my work stories. One at a time; give feedback.' },
+        { label: 'Practice system design', prompt: 'Interview me with a system design question relevant to my target roles.' },
+        { label: 'Sharpen a story', prompt: 'Pick one of my STAR stories and help me tighten it.' },
+      ];
+    case 'general':
+    default:
+      return [
+        { label: 'Build STAR stories', prompt: 'Interview me to build STAR stories from my resume. Ask one focused question at a time.' },
+        { label: 'Refine search criteria', prompt: 'Help me clarify my search criteria — target companies, level, comp, must-haves, dealbreakers.' },
+        { label: 'Update profile about', prompt: "Help me write a tight profile 'about' section — background, career arc, what I'm looking for next." },
+      ];
+  }
+}
+
 function renderShell(scope) {
   const header = scope.type === 'role'
     ? `${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`
     : 'Profile Coach';
 
-  const chips = scope.type === 'role'
-    ? [
-        { label: 'Tailor resume', prompt: 'Tailor my resume for this role.' },
-        { label: 'Research company', prompt: 'Generate a research packet for this company and role.' },
-        { label: 'Draft outreach', prompt: 'Draft an intro message I could send to a hiring manager or recruiter for this role.' },
-      ]
-    : [
-        { label: 'Build STAR stories', prompt: 'Interview me to build STAR stories from my resume. Ask one focused question at a time.' },
-        { label: 'Refine search criteria', prompt: 'Help me clarify my search criteria — target companies, level, comp, must-haves, dealbreakers.' },
-        { label: 'Update profile about', prompt: "Help me write a tight profile 'about' section — background, career arc, what I'm looking for next." },
-      ];
+  const chips = chipsForScope(scope);
 
   const placeholder = scope.type === 'role'
     ? 'Ask about this role…'
@@ -277,7 +303,9 @@ function sameScope(a, b) {
   if (!a || !b) return false;
   if (a.type !== b.type) return false;
   if (a.type === 'role') return a.role.id === b.role.id;
-  return true;
+  // Profile scopes differ if context differs — we want to re-render the chips
+  // when a different caller opens profile chat with a different intent.
+  return (a.context || 'general') === (b.context || 'general');
 }
 
 async function sendAfterOpen(text) {
