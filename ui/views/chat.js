@@ -1,4 +1,4 @@
-import { invoke, escapeHtml, renderMarkdown, toast } from '../app.js';
+import { invoke, escapeHtml, renderMarkdown, toast, isClaudeAgent } from '../app.js';
 
 // Scope:  { type: 'role', role: {id, company, title} } | { type: 'profile' }
 let currentScope = null;
@@ -464,16 +464,19 @@ async function sendCurrent() {
       renderThreadPicker();
     } catch { /* best-effort */ }
 
-    const convId = currentConversationId;
-    invoke('summarize_for_title', { text }).then(async (title) => {
-      if (!title || title === fallback) return;
-      try {
-        await invoke('rename_conversation', { conversationId: convId, title });
-        // Only rename in the cache if the user is still viewing this thread.
-        const c = currentConversations.find(x => x.id === convId);
-        if (c) { c.title = title; renderThreadPicker(); }
-      } catch { /* fallback stays */ }
-    }).catch(() => { /* fallback stays */ });
+    // Smart titles are Claude-only (summarize_for_title uses Anthropic/CLI).
+    // On Gemini/Codex/custom agents we silently stick with the slice fallback.
+    if (await isClaudeAgent()) {
+      const convId = currentConversationId;
+      invoke('summarize_for_title', { text }).then(async (title) => {
+        if (!title || title === fallback) return;
+        try {
+          await invoke('rename_conversation', { conversationId: convId, title });
+          const c = currentConversations.find(x => x.id === convId);
+          if (c) { c.title = title; renderThreadPicker(); }
+        } catch { /* fallback stays */ }
+      }).catch(() => { /* fallback stays */ });
+    }
   }
 
   input.value = '';

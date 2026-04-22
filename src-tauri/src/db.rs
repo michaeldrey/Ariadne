@@ -227,5 +227,19 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current < 7 {
+        // v7: which ACP agent to spawn. Ariadne is multi-vendor at the chat
+        // layer — each vendor ships an ACP adapter. 'claude' is the default
+        // and enables the full feature set (one-shots use Claude too).
+        // 'gemini' / 'codex' / 'custom' disable Claude-specific one-shots.
+        conn.execute_batch(
+            "
+            ALTER TABLE settings ADD COLUMN acp_agent TEXT DEFAULT 'claude';
+            ALTER TABLE settings ADD COLUMN acp_custom_command TEXT;
+            PRAGMA user_version = 7;
+            ",
+        )?;
+    }
+
     Ok(())
 }

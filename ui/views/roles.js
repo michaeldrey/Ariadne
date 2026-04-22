@@ -1,10 +1,16 @@
 import {
   invoke, escapeHtml, formatDate, stageBadgeClass, fitScoreClass,
-  toast, showModal, closeModal, navigate, renderMarkdown,
+  toast, showModal, closeModal, navigate, renderMarkdown, isClaudeAgent,
 } from '../app.js';
 import { openChat, closeChat, openChatAndSend } from './chat.js';
 
 const STAGES = ['Sourced', 'Applied', 'Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'];
+
+// Synchronous mirror of the ACP agent choice, refreshed at the top of each
+// top-level render. Gates Claude-only UI affordances (Fetch from URL,
+// Re-analyze, auto-analyze on JD save, etc.) so Gemini/Codex users don't
+// see dead buttons.
+let _claudeAgentSync = true;
 const OUTCOMES = ['Rejected', 'Withdrew', 'Accepted', 'Expired'];
 const CONTENT_FIELDS = [
   { key: 'jd', label: 'JD', field: 'jd_content', empty: 'No job description yet.', placeholder: 'Paste the full job description here.' },
@@ -102,12 +108,14 @@ export async function renderRoles(container) {
   const skipped = allRoles.filter(r => r.status === 'skipped');
 
   const withJd = allRoles.filter(r => r.status === 'active' && (r.jd_content || '').trim());
+  _claudeAgentSync = await isClaudeAgent();
+  const claudeOnly = _claudeAgentSync;
 
   container.innerHTML = `
     <div class="flex-between mb-16">
       <h2>Roles (${allRoles.length})</h2>
       <div class="btn-group">
-        <button class="btn" id="btn-analyze-all" ${withJd.length === 0 ? 'disabled title="No active roles with JDs"' : ''}>Re-analyze All (${withJd.length})</button>
+        ${claudeOnly ? `<button class="btn" id="btn-analyze-all" ${withJd.length === 0 ? 'disabled title="No active roles with JDs"' : ''}>Re-analyze All (${withJd.length})</button>` : ''}
         <button class="btn btn-primary" id="btn-add-role">+ Add Role</button>
       </div>
     </div>
@@ -442,6 +450,8 @@ let activeContentTab = 'jd';
 export async function renderRoleDetail(container, id) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading role...</div>';
 
+  _claudeAgentSync = await isClaudeAgent();
+
   // Re-render when an ACP/direct-API tool mutates this role.
   subscribeDataChanged((payload) => {
     if (payload.scope === 'role' && payload.role_id === id) {
@@ -770,7 +780,8 @@ function renderContentTab(role, field) {
         renderContentTab(fresh, field);
 
         // JD changed → auto-generate analysis + fit score in the background.
-        if (field.key === 'jd' && newValue.trim() && newValue.trim() !== prev.trim()) {
+        // Claude-only: the analysis command uses Anthropic API / Claude CLI.
+        if (_claudeAgentSync && field.key === 'jd' && newValue.trim() && newValue.trim() !== prev.trim()) {
           autoAnalyzeRole(role.id);
         }
       } catch (err) { toast(err.toString(), 'error'); }
@@ -786,7 +797,8 @@ function renderContentTab(role, field) {
   // Extra action available on the JD tab: fetch the JD from the role's URL.
   // Useful when the ATS is static (Greenhouse, Lever, Ashby); fails on
   // JS-rendered boards, which the backend surfaces in its error message.
-  const showFetchBtn = field.key === 'jd' && role.url && !value;
+  // Claude-only — the fetch command uses Anthropic/Claude CLI for extraction.
+  const showFetchBtn = field.key === 'jd' && role.url && !value && _claudeAgentSync;
   const fetchBtnHtml = showFetchBtn
     ? `<button class="btn btn-sm" id="btn-fetch-jd" title="Pull the JD text from ${escapeHtml(role.url)}">Fetch from URL</button>`
     : '';

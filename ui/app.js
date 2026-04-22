@@ -1,6 +1,24 @@
 // ── Tauri IPC ──
 const { invoke } = window.__TAURI__.core;
 
+// Cached ACP agent choice. Claude-specific features (Tailor Resume auto-run,
+// Fetch from URL, chat title gen, etc.) check this so they can be hidden
+// when the user picks Gemini/Codex/custom. Refresh via refreshAcpAgent()
+// after Settings saves.
+let _cachedAcpAgent = null;
+export async function acpAgent() {
+  if (_cachedAcpAgent) return _cachedAcpAgent;
+  try {
+    const s = await invoke('get_settings');
+    _cachedAcpAgent = s.acp_agent || 'claude';
+  } catch {
+    _cachedAcpAgent = 'claude';
+  }
+  return _cachedAcpAgent;
+}
+export function invalidateAcpAgentCache() { _cachedAcpAgent = null; }
+export async function isClaudeAgent() { return (await acpAgent()) === 'claude'; }
+
 // ── State ──
 let currentView = 'dashboard';
 let roles = [];

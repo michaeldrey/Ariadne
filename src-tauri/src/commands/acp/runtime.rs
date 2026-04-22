@@ -22,6 +22,7 @@ use agent_client_protocol::{
     },
 };
 use agent_client_protocol_tokio::AcpAgent;
+use std::str::FromStr;
 use rusqlite::params;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -106,40 +107,58 @@ impl AcpRuntime {
         // pay-per-token via the Anthropic API. If unset, we spawn without it
         // and the subprocess uses the user's Claude Pro/Max subscription
         // credentials (stored by `claude /login` from the Claude Code CLI).
+        // (Only relevant for claude-code-acp; Gemini/Codex agents use their
+        // own auth flows.)
         let api_key = resolve_api_key_opt(&db);
-        let auth_mode = if api_key.is_some() { "API key" } else { "Claude Pro/Max subscription" };
-        eprintln!("[acp] auth: {}", auth_mode);
 
-        // Prefer a globally-installed binary over `npx -y @latest` — npx
-        // checks the npm registry every launch (adds ~1–30s). If the user
-        // hasn't run the install wizard we fall back to npx so the app
-        // still works out of the box.
-        let mut args: Vec<String> = vec![];
-        if let Some(key) = &api_key {
-            args.push(format!("ANTHROPIC_API_KEY={}", key));
-        }
-        match super::install::detect_acp_install().await.ok() {
-            Some(status) if status.installed && status.path.is_some() => {
-                eprintln!(
-                    "[acp] using installed binary {} (v{})",
-                    status.path.as_deref().unwrap_or("?"),
-                    status.version.as_deref().unwrap_or("?")
-                );
-                args.push(status.path.clone().unwrap());
+        let (acp_agent_choice, acp_custom_command) = read_acp_agent_choice(&db);
+        eprintln!("[acp] agent: {}", acp_agent_choice);
+
+        let agent = match acp_agent_choice.as_str() {
+            "gemini" => AcpAgent::google_gemini(),
+            "codex" => AcpAgent::zed_codex(),
+            "custom" => {
+                let cmd = acp_custom_command
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or("ACP Agent set to 'custom' but no command is configured. Set one in Settings → AI & Backends.")?;
+                AcpAgent::from_str(cmd)
+                    .map_err(|e| format!("parsing custom ACP command: {}", e))?
             }
             _ => {
-                eprintln!("[acp] claude-code-acp not installed globally — falling back to npx (slower cold starts)");
-                args.push("npx".to_string());
-                args.push("-y".to_string());
-                args.push("@zed-industries/claude-code-acp@latest".to_string());
+                // Default: Claude. This is the only branch that benefits from
+                // (a) forwarding ANTHROPIC_API_KEY for pay-per-token, (b) the
+                // globally-installed binary short-circuit. Gemini/Codex ship
+                // their own CLIs and will pay the npx cost on cold starts.
+                let auth_mode = if api_key.is_some() { "API key" } else { "Claude Pro/Max subscription" };
+                eprintln!("[acp] claude auth: {}", auth_mode);
+                let mut args: Vec<String> = vec![];
+                if let Some(key) = &api_key {
+                    args.push(format!("ANTHROPIC_API_KEY={}", key));
+                }
+                match super::install::detect_acp_install().await.ok() {
+                    Some(status) if status.installed && status.path.is_some() => {
+                        eprintln!(
+                            "[acp] using installed binary {} (v{})",
+                            status.path.as_deref().unwrap_or("?"),
+                            status.version.as_deref().unwrap_or("?")
+                        );
+                        args.push(status.path.clone().unwrap());
+                    }
+                    _ => {
+                        eprintln!("[acp] claude-code-acp not installed globally — falling back to npx (slower cold starts)");
+                        args.push("npx".to_string());
+                        args.push("-y".to_string());
+                        args.push("@zed-industries/claude-code-acp@latest".to_string());
+                    }
+                }
+                AcpAgent::from_args(args).map_err(|e| format!("building claude agent: {}", e))?
             }
-        }
+        };
 
-        let agent = AcpAgent::from_args(args)
-            .map_err(|e| format!("building acp agent: {}", e))?
-            .with_debug(|line, direction| {
-                eprintln!("[acp {:?}] {}", direction, line);
-            });
+        let agent = agent.with_debug(|line, direction| {
+            eprintln!("[acp {:?}] {}", direction, line);
+        });
         let index = self.session_index.clone();
         let tool_calls = self.tool_calls.clone();
         let turn_text = self.turn_text.clone();
@@ -666,6 +685,26 @@ fn build_context_preamble(db: &Database, scope: &Scope) -> Option<String> {
         return None; // Only the header — nothing useful to say.
     }
     Some(parts.join("\n\n"))
+}
+
+/// Read the user's ACP agent choice + optional custom command string.
+/// Defaults to Claude if nothing is set (fresh install, pre-v7 schema).
+fn read_acp_agent_choice(db: &Database) -> (String, Option<String>) {
+    let default = ("claude".to_string(), None);
+    let conn = match db.0.lock() {
+        Ok(c) => c,
+        Err(_) => return default,
+    };
+    conn.query_row(
+        "SELECT acp_agent, acp_custom_command FROM settings WHERE id = 1",
+        [],
+        |r| {
+            let a: Option<String> = r.get(0)?;
+            let c: Option<String> = r.get(1)?;
+            Ok((a.unwrap_or_else(|| "claude".to_string()), c))
+        },
+    )
+    .unwrap_or(default)
 }
 
 /// Resolve the Anthropic API key if the user has one. Returns None to signal

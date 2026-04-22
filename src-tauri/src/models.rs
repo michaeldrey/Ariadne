@@ -167,6 +167,8 @@ pub struct Settings {
     pub search_criteria: Option<String>,
     pub resume_filename: String,
     pub agent_backend: String,
+    pub acp_agent: String,
+    pub acp_custom_command: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,6 +184,8 @@ pub struct UpdateSettings {
     pub search_criteria: Option<String>,
     pub resume_filename: Option<String>,
     pub agent_backend: Option<String>,
+    pub acp_agent: Option<String>,
+    pub acp_custom_command: Option<String>,
 }
 
 // ── Claude API ──

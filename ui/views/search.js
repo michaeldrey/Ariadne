@@ -1,4 +1,4 @@
-import { invoke, escapeHtml, toast } from '../app.js';
+import { invoke, escapeHtml, toast, isClaudeAgent } from '../app.js';
 import { openProfileChatAndSend } from './chat.js';
 
 let searchResults = null;
@@ -221,6 +221,7 @@ function wireAiResults(container) {
 async function setupFromAiMatch(match, container) {
   settingUpByUrl.set(match.url, 'setting-up');
   renderAiResults(container);
+  const claudeOnly = await isClaudeAgent();
   try {
     const role = await invoke('create_role', {
       data: {
@@ -229,14 +230,20 @@ async function setupFromAiMatch(match, container) {
         url: match.url,
       },
     });
-    // Fetch JD + auto-analyze in the same pipeline as the manual flow.
+    // Claude-only: fetch_jd_from_url + tailor_resume use Anthropic/CLI.
+    // On other agents we just create the role; user can paste the JD and
+    // ask the agent to analyze it via chat.
+    if (!claudeOnly) {
+      settingUpByUrl.set(match.url, 'done');
+      renderAiResults(container);
+      toast(`Added ${match.company} — ${match.title}. Open the role to paste a JD.`, 'success');
+      return;
+    }
     let jd = null;
     try {
       jd = await invoke('fetch_jd_from_url', { url: match.url });
       await invoke('update_role', { id: role.id, data: { jd_content: jd } });
     } catch (err) {
-      // JD fetch can fail on JS-rendered boards; keep going so the role at
-      // least exists, but skip analysis (which needs a JD).
       toast(`JD fetch failed for ${match.company}: ${err}. Role added; fetch manually.`, 'error');
       settingUpByUrl.set(match.url, 'done');
       renderAiResults(container);
@@ -245,7 +252,6 @@ async function setupFromAiMatch(match, container) {
     try {
       await invoke('tailor_resume', { roleId: role.id });
     } catch (err) {
-      // Analysis failure is non-fatal — role + JD are saved.
       toast(`Analysis for ${match.company} failed: ${err}`, 'error');
     }
     settingUpByUrl.set(match.url, 'done');

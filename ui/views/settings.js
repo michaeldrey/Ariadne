@@ -1,4 +1,4 @@
-import { invoke, escapeHtml, toast } from '../app.js';
+import { invoke, escapeHtml, toast, invalidateAcpAgentCache } from '../app.js';
 
 // Which section of the Settings page is active. Module-scoped so switching
 // tabs re-renders without losing the active section on data refresh.
@@ -105,7 +105,7 @@ function renderAiBackends(el, settings, container) {
         <label>Backend</label>
         <select id="agent-backend">
           <option value="direct" ${backend === 'direct' ? 'selected' : ''}>Direct (Anthropic Messages API)</option>
-          <option value="acp" ${backend === 'acp' ? 'selected' : ''}>ACP (claude-code-acp)</option>
+          <option value="acp" ${backend === 'acp' ? 'selected' : ''}>ACP (multi-vendor)</option>
         </select>
       </div>
       <button class="btn btn-sm btn-primary" id="btn-save-backend">Save Backend</button>
@@ -113,6 +113,26 @@ function renderAiBackends(el, settings, container) {
       <div id="acp-install-status" class="text-sm mt-16 pt-8" style="border-top:1px solid var(--border)">
         <div class="text-muted">Checking <code>claude-code-acp</code> install…</div>
       </div>
+    </div>
+
+    <div class="card mb-16">
+      <h3>ACP Agent</h3>
+      <p class="text-muted text-sm mb-8">When ACP is selected above, which vendor's agent do we spawn? Only Claude unlocks the full Ariadne feature set — the others can chat but can't run one-shot analysis (Tailor Resume, Fetch JD, etc.), which are Claude-specific today.</p>
+      <div class="form-group">
+        <label>Agent</label>
+        <select id="acp-agent">
+          <option value="claude" ${(settings.acp_agent || 'claude') === 'claude' ? 'selected' : ''}>Claude (@zed-industries/claude-code-acp)</option>
+          <option value="gemini" ${settings.acp_agent === 'gemini' ? 'selected' : ''}>Gemini (@google/gemini-cli --experimental-acp)</option>
+          <option value="codex" ${settings.acp_agent === 'codex' ? 'selected' : ''}>Codex/GPT (@zed-industries/codex-acp)</option>
+          <option value="custom" ${settings.acp_agent === 'custom' ? 'selected' : ''}>Custom command</option>
+        </select>
+      </div>
+      <div class="form-group" id="acp-custom-row" style="${settings.acp_agent === 'custom' ? '' : 'display:none'}">
+        <label>Custom Command</label>
+        <input type="text" id="acp-custom-command" value="${escapeHtml(settings.acp_custom_command) || ''}" placeholder="e.g. npx -y some-other-acp-adapter@latest" style="font-family:var(--font-mono);font-size:12px" />
+        <p class="text-muted text-sm mt-8">Any command that speaks ACP on stdio. Leading <code>NAME=value</code> args are parsed as env vars.</p>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-save-acp-agent">Save Agent</button>
     </div>
   `;
 
@@ -135,6 +155,23 @@ function renderAiBackends(el, settings, container) {
     try {
       await invoke('update_settings', { data: { agent_backend: document.getElementById('agent-backend').value } });
       toast('Agent backend saved', 'success');
+    } catch (err) { toast(err.toString(), 'error'); }
+  });
+
+  // ACP agent dropdown toggles the Custom Command row.
+  document.getElementById('acp-agent').addEventListener('change', (e) => {
+    document.getElementById('acp-custom-row').style.display = e.target.value === 'custom' ? '' : 'none';
+  });
+  document.getElementById('btn-save-acp-agent').addEventListener('click', async () => {
+    try {
+      await invoke('update_settings', {
+        data: {
+          acp_agent: document.getElementById('acp-agent').value,
+          acp_custom_command: document.getElementById('acp-custom-command').value || null,
+        }
+      });
+      invalidateAcpAgentCache();
+      toast('ACP agent saved — restart the app for the change to take effect', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 

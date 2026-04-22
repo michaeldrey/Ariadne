@@ -12,11 +12,12 @@ let closedExpanded = false;
 export async function renderDashboard(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading dashboard...</div>';
 
-  const [allRoles, settings, allTasks, recentChats] = await Promise.all([
+  const [allRoles, settings, allTasks, recentChats, claudeCli] = await Promise.all([
     invoke('list_roles', { status: null }),
     invoke('get_settings'),
     invoke('list_tasks', { status: null, roleId: null }),
     invoke('list_recent_conversations', { limit: 5 }),
+    invoke('detect_claude_cli').catch(() => ({ installed: false })),
   ]);
   const active = allRoles.filter(r => r.status === 'active');
   const closed = allRoles.filter(r => r.status === 'closed');
@@ -39,7 +40,7 @@ export async function renderDashboard(container) {
   STAGES.forEach(s => stageCounts[s] = 0);
   active.forEach(r => { if (stageCounts[r.stage] !== undefined) stageCounts[r.stage]++; });
 
-  const checklist = buildSetupChecklist(settings, allRoles.length);
+  const checklist = buildSetupChecklist(settings, allRoles.length, claudeCli);
   const showWelcome = checklist.some(item => !item.done);
 
   container.innerHTML = `
@@ -359,10 +360,20 @@ function wireStageDropdowns(scope, afterChange) {
   });
 }
 
-function buildSetupChecklist(settings, roleCount) {
+function buildSetupChecklist(settings, roleCount, claudeCli) {
   const has = (v) => typeof v === 'string' && v.trim().length > 0;
+  const hasKey = has(settings?.anthropic_api_key);
+  const hasCli = !!claudeCli?.installed;
+  // Auth is satisfied by EITHER an API key OR a detected Claude Code CLI
+  // install (user runs `claude /login` for Pro/Max subscription). Label
+  // reflects the actual state so users aren't nagged.
+  const authLabel = hasKey
+    ? 'Anthropic API key configured'
+    : hasCli
+      ? 'Claude CLI detected — make sure you\'ve run `claude /login`'
+      : 'Set up authentication (Pro/Max subscription or API key)';
   return [
-    { key: 'api', label: 'Add your Anthropic API key', href: '#/settings',   done: has(settings?.anthropic_api_key) },
+    { key: 'auth', label: authLabel, href: '#/settings', done: hasKey || hasCli },
     { key: 'name', label: 'Set your name',              href: '#/profile',   done: has(settings?.profile_name) },
     { key: 'resume', label: 'Paste your master resume', href: '#/profile',   done: has(settings?.resume_content) },
     { key: 'stories', label: 'Generate work stories',   href: '#/profile',   done: has(settings?.work_stories) },
