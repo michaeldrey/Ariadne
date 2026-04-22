@@ -64,13 +64,31 @@ impl AcpRuntime {
 
     /// Spawn the agent subprocess and hold its `ConnectionTo` in state if not
     /// already. Safe to call concurrently; only one connection is spawned.
-    async fn ensure_connected(&self, app: AppHandle) -> Result<ConnectionTo<Agent>, String> {
+    /// Forwards `ANTHROPIC_API_KEY` from the process environment into the
+    /// subprocess — if not set there, we fall back to the user's settings
+    /// row (same source the direct-API path uses).
+    async fn ensure_connected(
+        &self,
+        app: AppHandle,
+        db: Database,
+    ) -> Result<ConnectionTo<Agent>, String> {
         let mut guard = self.connection.lock().await;
         if let Some(conn) = guard.as_ref() {
             return Ok(conn.clone());
         }
 
-        let agent = AcpAgent::zed_claude_code();
+        let api_key = resolve_api_key(&db)?;
+
+        let agent = AcpAgent::from_args([
+            format!("ANTHROPIC_API_KEY={}", api_key),
+            "npx".to_string(),
+            "-y".to_string(),
+            "@zed-industries/claude-code-acp@latest".to_string(),
+        ])
+        .map_err(|e| format!("building acp agent: {}", e))?
+        .with_debug(|line, direction| {
+            eprintln!("[acp {:?}] {}", direction, line);
+        });
         let index = self.session_index.clone();
         let app_for_handler = app.clone();
 
@@ -150,7 +168,7 @@ impl AcpRuntime {
             }
         }
 
-        let connection = self.ensure_connected(app).await?;
+        let connection = self.ensure_connected(app, db.clone()).await?;
 
         let (url, token, cancel) = spawn_mcp_server(db, scope, conversation_id).await?;
 
@@ -222,7 +240,7 @@ impl AcpRuntime {
         let session_id = self
             .ensure_session(app.clone(), db.clone(), conversation_id, scope)
             .await?;
-        let connection = self.ensure_connected(app.clone()).await?;
+        let connection = self.ensure_connected(app.clone(), db.clone()).await?;
 
         emit(
             &app,
@@ -349,6 +367,23 @@ fn first_text_from_tool_content(
 
 fn session_id_to_string(id: &SessionId) -> String {
     id.0.to_string()
+}
+
+/// Resolve the Anthropic API key. Process env wins if set; otherwise we fall
+/// back to the key the user stored via Settings (same source the direct-API
+/// path uses).
+fn resolve_api_key(db: &Database) -> Result<String, String> {
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            return Ok(key);
+        }
+    }
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let key: Option<String> = conn
+        .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    key.filter(|k| !k.is_empty())
+        .ok_or_else(|| "No Anthropic API key — set one in Settings".to_string())
 }
 
 fn emit(app: &AppHandle, payload: Value) {
