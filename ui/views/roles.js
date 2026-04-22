@@ -17,8 +17,26 @@ const CONTENT_FIELDS = [
 let listSort = { key: 'updated_date', dir: 'desc' };
 let activeTab = 'active';
 
+// Handle to the current `data:changed` subscription so we can drop it when
+// re-rendering or navigating away. One listener at a time.
+let dataChangedUnlisten = null;
+async function subscribeDataChanged(handler) {
+  if (dataChangedUnlisten) {
+    try { dataChangedUnlisten(); } catch {}
+    dataChangedUnlisten = null;
+  }
+  const { listen } = window.__TAURI__.event;
+  dataChangedUnlisten = await listen('data:changed', (e) => handler(e.payload));
+}
+
 export async function renderRoles(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading roles...</div>';
+
+  // Re-render on any role-scoped mutation so the list picks up stage changes
+  // etc. from the chat without the user having to hit refresh.
+  subscribeDataChanged((payload) => {
+    if (payload.scope === 'role') renderRoles(container);
+  });
 
   const allRoles = await invoke('list_roles', { status: null });
   const active = allRoles.filter(r => r.status === 'active');
@@ -309,6 +327,13 @@ let activeContentTab = 'jd';
 
 export async function renderRoleDetail(container, id) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading role...</div>';
+
+  // Re-render when an ACP/direct-API tool mutates this role.
+  subscribeDataChanged((payload) => {
+    if (payload.scope === 'role' && payload.role_id === id) {
+      renderRoleDetail(container, id);
+    }
+  });
 
   let role;
   try {

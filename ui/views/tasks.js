@@ -1,7 +1,22 @@
 import { invoke, escapeHtml, formatDate, toast, showModal, closeModal } from '../app.js';
 
+let dataChangedUnlisten = null;
+async function subscribeDataChanged(handler) {
+  if (dataChangedUnlisten) {
+    try { dataChangedUnlisten(); } catch {}
+    dataChangedUnlisten = null;
+  }
+  const { listen } = window.__TAURI__.event;
+  dataChangedUnlisten = await listen('data:changed', (e) => handler(e.payload));
+}
+
 export async function renderTasks(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading tasks...</div>';
+
+  // `create_task` fires data:changed with tool=create_task, scope=role.
+  subscribeDataChanged((payload) => {
+    if (payload.tool === 'create_task') renderTasks(container);
+  });
 
   const allTasks = await invoke('list_tasks', { status: null, roleId: null });
   const pending = allTasks.filter(t => t.status === 'pending');

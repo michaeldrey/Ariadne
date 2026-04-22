@@ -35,10 +35,11 @@ use super::tools::Scope;
 
 const EVENT_CHANNEL: &str = "agent:event";
 
-/// Reverse index: ACP session id -> Ariadne conversation id. The notification
-/// handler (which doesn't have access to the main runtime's maps without
-/// deadlocking) uses this to route `SessionUpdate`s onto the right chat view.
-type SessionIndex = Arc<StdMutex<HashMap<String, i64>>>;
+/// Reverse index: ACP session id -> (conversation id, scope). The
+/// notification handler (which doesn't have access to the main runtime's maps
+/// without deadlocking) uses this to route `SessionUpdate`s onto the right
+/// chat view and to fire data-changed events with the right scope.
+type SessionIndex = Arc<StdMutex<HashMap<String, (i64, Scope)>>>;
 
 /// Ongoing tool-call state, keyed by tool_call_id. Populated on the first
 /// `ToolCall` notification; merged + cleared on the terminal `ToolCallUpdate`
@@ -185,6 +186,7 @@ impl AcpRuntime {
 
         let connection = self.ensure_connected(app, db.clone()).await?;
 
+        let scope_for_index = scope.clone();
         let (url, token, cancel) = spawn_mcp_server(db, scope, conversation_id).await?;
 
         let cwd = std::env::current_dir()
@@ -207,7 +209,7 @@ impl AcpRuntime {
         self.session_index
             .lock()
             .unwrap()
-            .insert(session_id_to_string(&session_id), conversation_id);
+            .insert(session_id_to_string(&session_id), (conversation_id, scope_for_index));
 
         self.sessions.lock().await.insert(
             conversation_id,
@@ -303,8 +305,8 @@ fn route_session_update(
     notification: SessionNotification,
 ) {
     let session_key = session_id_to_string(&notification.session_id);
-    let conversation_id = match index.lock().unwrap().get(&session_key) {
-        Some(&id) => id,
+    let (conversation_id, scope) = match index.lock().unwrap().get(&session_key) {
+        Some((id, s)) => (*id, s.clone()),
         None => return,
     };
 
@@ -403,9 +405,39 @@ fn route_session_update(
                     "summary": summary,
                 }),
             );
+
+            if ok {
+                let (label, role_id) = match &scope {
+                    Scope::Role(id) => ("role", Some(id.as_str())),
+                    Scope::Profile => ("profile", None),
+                };
+                emit_data_changed(app, label, role_id, &name);
+            }
         }
         _ => {}
     }
+}
+
+/// Fire `data:changed` so open views (role detail, profile, tasks list) can
+/// re-fetch after a tool mutated their data. Scoped to the conversation's
+/// scope + the role_id (if role-scoped) so views don't over-refresh.
+/// Takes stringly-typed args so both the ACP path and the direct-API path
+/// can call this without sharing a `Scope` enum (the two paths have
+/// structurally-identical but distinct `Scope` types).
+pub fn emit_data_changed(
+    app: &AppHandle,
+    scope_label: &str,
+    role_id: Option<&str>,
+    tool_name: &str,
+) {
+    let _ = app.emit(
+        "data:changed",
+        json!({
+            "scope": scope_label,
+            "role_id": role_id,
+            "tool": tool_name,
+        }),
+    );
 }
 
 /// Strip the `mcp__<server>__` prefix claude-code-acp prepends to tool names

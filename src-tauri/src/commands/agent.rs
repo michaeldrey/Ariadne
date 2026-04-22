@@ -512,6 +512,16 @@ async fn consume_stream(
                                     "summary": summary,
                                 }),
                             );
+
+                            if ok {
+                                let (label, role_id) = match scope {
+                                    Scope::Role(id) => ("role", Some(id.as_str())),
+                                    Scope::Profile => ("profile", None),
+                                };
+                                crate::commands::acp::runtime::emit_data_changed(
+                                    app, label, role_id, &tool_name,
+                                );
+                            }
                         }
                     }
                 }

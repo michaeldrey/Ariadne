@@ -1,6 +1,16 @@
 import { invoke, escapeHtml, toast, renderMarkdown } from '../app.js';
 import { openProfileChat, openProfileChatAndSend } from './chat.js';
 
+let dataChangedUnlisten = null;
+async function subscribeDataChanged(handler) {
+  if (dataChangedUnlisten) {
+    try { dataChangedUnlisten(); } catch {}
+    dataChangedUnlisten = null;
+  }
+  const { listen } = window.__TAURI__.event;
+  dataChangedUnlisten = await listen('data:changed', (e) => handler(e.payload));
+}
+
 // Parse markdown work stories. Supports two formats:
 //   (a) `## Title` + `**Situation:** / **Task:** / **Action:** / **Result:**` inline labels
 //   (b) `## Title` + `### Situation / ### Action / ### Result / ### Context / ...` h3 sections
@@ -69,6 +79,10 @@ let editingStories = false;
 
 export async function renderProfile(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading profile...</div>';
+
+  subscribeDataChanged((payload) => {
+    if (payload.scope === 'profile') renderProfile(container);
+  });
 
   const settings = await invoke('get_settings');
 
