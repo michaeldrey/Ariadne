@@ -89,11 +89,18 @@ export async function renderRoles(container) {
   const closed = allRoles.filter(r => r.status === 'closed');
   const skipped = allRoles.filter(r => r.status === 'skipped');
 
+  const withJd = allRoles.filter(r => r.status === 'active' && (r.jd_content || '').trim());
+
   container.innerHTML = `
     <div class="flex-between mb-16">
       <h2>Roles (${allRoles.length})</h2>
-      <button class="btn btn-primary" id="btn-add-role">+ Add Role</button>
+      <div class="btn-group">
+        <button class="btn" id="btn-analyze-all" ${withJd.length === 0 ? 'disabled title="No active roles with JDs"' : ''}>Re-analyze All (${withJd.length})</button>
+        <button class="btn btn-primary" id="btn-add-role">+ Add Role</button>
+      </div>
     </div>
+
+    <div id="analyze-all-status" class="analysis-status hidden"></div>
 
     <div class="tabs" id="role-tabs">
       <button class="tab ${activeTab === 'active' ? 'active' : ''}" data-tab="active">Active (${active.length})</button>
@@ -121,6 +128,55 @@ export async function renderRoles(container) {
   });
 
   document.getElementById('btn-add-role').addEventListener('click', showAddRoleModal);
+  document.getElementById('btn-analyze-all')?.addEventListener('click', () => batchAnalyze(withJd, container));
+}
+
+// Running a batch re-analysis on every active role that has a JD. Serial, not
+// parallel — parallel would (a) hit API rate limits and (b) make the progress
+// banner useless. Continues through failures.
+let batchAnalyzing = false;
+async function batchAnalyze(roles, container) {
+  if (batchAnalyzing) return;
+  batchAnalyzing = true;
+
+  const btn = document.getElementById('btn-analyze-all');
+  if (btn) btn.disabled = true;
+  const total = roles.length;
+  let done = 0;
+  let failed = 0;
+
+  const setBanner = (state, msg) => {
+    const el = document.getElementById('analyze-all-status');
+    if (!el) return;
+    el.className = `analysis-status analysis-${state}`;
+    const icon = state === 'running' ? '<div class="spinner"></div>'
+      : state === 'success' ? '<span style="color:var(--green)">✓</span>'
+      : state === 'error' ? '<span style="color:var(--red)">✕</span>'
+      : '';
+    el.innerHTML = `${icon}<span>${escapeHtml(msg)}</span>`;
+  };
+
+  for (const r of roles) {
+    setBanner('running', `Analyzing ${done + 1} of ${total}: ${r.company} — ${r.title}${failed ? ` (${failed} failed)` : ''}`);
+    try {
+      await invoke('tailor_resume', { roleId: r.id });
+    } catch (err) {
+      failed += 1;
+      console.error(`[analyze-all] ${r.company} — ${r.title}: ${err}`);
+    }
+    done += 1;
+  }
+
+  batchAnalyzing = false;
+
+  // Refresh the list first so new fit scores show in the table, THEN show
+  // the summary banner (rendering wipes the old banner element).
+  await renderRoles(container);
+
+  const summary = failed === 0
+    ? `Analyzed ${done} role${done === 1 ? '' : 's'}`
+    : `Analyzed ${done - failed} of ${total}; ${failed} failed (see console)`;
+  setBanner(failed === 0 ? 'success' : 'error', summary);
 }
 
 function renderActiveTab(active) {
