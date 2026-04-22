@@ -69,9 +69,6 @@ pub fn run() {
             commands::agent::list_messages,
             commands::agent::list_artifacts,
             commands::agent::send_to_conversation,
-            // ACP spike (step 3 — temporary; remove once step 4 wires the full flow)
-            commands::acp::client::acp_spike_probe,
-            commands::acp::mcp_server::acp_mcp_server_spike,
             commands::acp::runtime::send_to_conversation_acp,
         ])
         .run(tauri::generate_context!())

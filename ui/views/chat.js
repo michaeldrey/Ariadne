@@ -438,10 +438,26 @@ async function sendCurrent() {
   setStatus('Thinking…');
 
   try {
-    await invoke('send_to_conversation', { conversationId: currentConversationId, userText: text });
+    const backend = await resolveBackend();
+    const command = backend === 'acp' ? 'send_to_conversation_acp' : 'send_to_conversation';
+    await invoke(command, { conversationId: currentConversationId, userText: text });
   } catch (err) {
     setStatus(err.toString(), true);
   }
+}
+
+// Cache the backend for the session — user changes it from Settings, which
+// prompts an app restart anyway for the ACP subprocess to pick up.
+let cachedBackend = null;
+async function resolveBackend() {
+  if (cachedBackend) return cachedBackend;
+  try {
+    const s = await invoke('get_settings');
+    cachedBackend = s.agent_backend || 'direct';
+  } catch {
+    cachedBackend = 'direct';
+  }
+  return cachedBackend;
 }
 
 function appendUserMessage(container, text) {

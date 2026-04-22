@@ -45,6 +45,19 @@ export async function renderSettings(container) {
     </div>
 
     <div class="card mb-16">
+      <h3>Agent Backend</h3>
+      <p class="text-muted text-sm mb-8">Which engine runs chat + tool calls. ACP (Agent Client Protocol) uses the Zed-maintained <code>claude-code-acp</code> adapter — multi-vendor pluggable and required for future features. Direct hits the Anthropic API directly and is scheduled for removal.</p>
+      <div class="form-group">
+        <label>Backend</label>
+        <select id="agent-backend">
+          <option value="direct" ${(settings.agent_backend || 'direct') === 'direct' ? 'selected' : ''}>Direct (Anthropic Messages API)</option>
+          <option value="acp" ${settings.agent_backend === 'acp' ? 'selected' : ''}>ACP (claude-code-acp)</option>
+        </select>
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-save-backend">Save Backend</button>
+    </div>
+
+    <div class="card mb-16">
       <h3>Import Data</h3>
       <p class="text-muted text-sm mb-8">Import data from your existing Ariadne JSON files (tracker.json, network.json, tasks.json).</p>
       <div class="btn-group">
@@ -72,6 +85,16 @@ export async function renderSettings(container) {
       document.getElementById('anthropic-key').value = '';
       toast('API key cleared', 'success');
       renderSettings(container);
+    } catch (err) { toast(err.toString(), 'error'); }
+  });
+
+  // Save agent backend
+  document.getElementById('btn-save-backend').addEventListener('click', async () => {
+    try {
+      await invoke('update_settings', {
+        data: { agent_backend: document.getElementById('agent-backend').value }
+      });
+      toast('Agent backend saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 

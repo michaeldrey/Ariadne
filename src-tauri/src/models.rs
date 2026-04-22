@@ -166,6 +166,7 @@ pub struct Settings {
     pub profile_json: Option<String>,
     pub search_criteria: Option<String>,
     pub resume_filename: String,
+    pub agent_backend: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +181,7 @@ pub struct UpdateSettings {
     pub profile_json: Option<String>,
     pub search_criteria: Option<String>,
     pub resume_filename: Option<String>,
+    pub agent_backend: Option<String>,
 }
 
 // ── Claude API ──

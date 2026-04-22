@@ -40,10 +40,23 @@ const EVENT_CHANNEL: &str = "agent:event";
 /// deadlocking) uses this to route `SessionUpdate`s onto the right chat view.
 type SessionIndex = Arc<StdMutex<HashMap<String, i64>>>;
 
+/// Ongoing tool-call state, keyed by tool_call_id. Populated on the first
+/// `ToolCall` notification; merged + cleared on the terminal `ToolCallUpdate`
+/// (status=Completed|Failed) so the `tool_call_result` event has the name +
+/// input the update alone doesn't carry.
+#[derive(Clone)]
+struct ToolCallState {
+    name: String,
+    input: Value,
+    started_emitted: bool,
+}
+type ToolCallIndex = Arc<StdMutex<HashMap<String, ToolCallState>>>;
+
 pub struct AcpRuntime {
     connection: Mutex<Option<ConnectionTo<Agent>>>,
     sessions: Mutex<HashMap<i64, ConversationSession>>,
     session_index: SessionIndex,
+    tool_calls: ToolCallIndex,
 }
 
 struct ConversationSession {
@@ -59,6 +72,7 @@ impl AcpRuntime {
             connection: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
             session_index: Arc::new(StdMutex::new(HashMap::new())),
+            tool_calls: Arc::new(StdMutex::new(HashMap::new())),
         })
     }
 
@@ -90,6 +104,7 @@ impl AcpRuntime {
             eprintln!("[acp {:?}] {}", direction, line);
         });
         let index = self.session_index.clone();
+        let tool_calls = self.tool_calls.clone();
         let app_for_handler = app.clone();
 
         let (conn_tx, conn_rx) = oneshot::channel::<ConnectionTo<Agent>>();
@@ -100,7 +115,7 @@ impl AcpRuntime {
                 .name("ariadne")
                 .on_receive_notification(
                     async move |notification: SessionNotification, _cx| {
-                        route_session_update(&app_for_handler, &index, notification);
+                        route_session_update(&app_for_handler, &index, &tool_calls, notification);
                         Ok(())
                     },
                     agent_client_protocol::on_receive_notification!(),
@@ -284,6 +299,7 @@ impl AcpRuntime {
 fn route_session_update(
     app: &AppHandle,
     index: &SessionIndex,
+    tool_calls: &ToolCallIndex,
     notification: SessionNotification,
 ) {
     let session_key = session_id_to_string(&notification.session_id);
@@ -306,15 +322,38 @@ fn route_session_update(
             }
         }
         SessionUpdate::ToolCall(tc) => {
-            emit(
-                app,
-                json!({
-                    "type": "tool_call_start",
-                    "conversation_id": conversation_id,
-                    "tool_use_id": tc.tool_call_id.0.to_string(),
-                    "name": tc.title,
-                }),
-            );
+            // The agent may emit the same ToolCall twice — once with empty
+            // rawInput, once with the populated args. Dedupe `tool_call_start`
+            // by id, but keep updating the cached input on each emission.
+            let id = tc.tool_call_id.0.to_string();
+            let display_name = strip_mcp_prefix(&tc.title);
+            let input = tc.raw_input.clone().unwrap_or(Value::Null);
+
+            let should_emit_start = {
+                let mut map = tool_calls.lock().unwrap();
+                let entry = map.entry(id.clone()).or_insert_with(|| ToolCallState {
+                    name: display_name.clone(),
+                    input: Value::Null,
+                    started_emitted: false,
+                });
+                entry.name = display_name.clone();
+                entry.input = input.clone();
+                let first = !entry.started_emitted;
+                entry.started_emitted = true;
+                first
+            };
+
+            if should_emit_start {
+                emit(
+                    app,
+                    json!({
+                        "type": "tool_call_start",
+                        "conversation_id": conversation_id,
+                        "tool_use_id": id,
+                        "name": display_name,
+                    }),
+                );
+            }
         }
         SessionUpdate::ToolCallUpdate(update) => {
             use agent_client_protocol::schema::ToolCallStatus;
@@ -324,24 +363,41 @@ fn route_session_update(
                 return;
             }
             let ok = matches!(status, Some(ToolCallStatus::Completed));
+            let id = update.tool_call_id.0.to_string();
+
+            let (cached_name, cached_input) = {
+                let mut map = tool_calls.lock().unwrap();
+                match map.remove(&id) {
+                    Some(s) => (s.name, s.input),
+                    None => (String::new(), Value::Null),
+                }
+            };
+
             let summary = update
                 .fields
                 .content
                 .as_ref()
                 .and_then(|c| c.iter().find_map(first_text_from_tool_content))
                 .unwrap_or_else(|| if ok { "done".to_string() } else { "failed".to_string() });
+            let name = update
+                .fields
+                .title
+                .map(|t| strip_mcp_prefix(&t))
+                .filter(|s| !s.is_empty())
+                .unwrap_or(cached_name);
             let input = update
                 .fields
                 .raw_input
                 .clone()
-                .unwrap_or(Value::Null);
+                .unwrap_or(cached_input);
+
             emit(
                 app,
                 json!({
                     "type": "tool_call_result",
                     "conversation_id": conversation_id,
-                    "tool_use_id": update.tool_call_id.0.to_string(),
-                    "name": update.fields.title.unwrap_or_default(),
+                    "tool_use_id": id,
+                    "name": name,
                     "input": input,
                     "ok": ok,
                     "summary": summary,
@@ -350,6 +406,18 @@ fn route_session_update(
         }
         _ => {}
     }
+}
+
+/// Strip the `mcp__<server>__` prefix claude-code-acp prepends to tool names
+/// so the UI bubble says `update_stage` instead of
+/// `mcp__ariadne-tools__update_stage`.
+fn strip_mcp_prefix(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        if let Some((_server, tool)) = rest.split_once("__") {
+            return tool.to_string();
+        }
+    }
+    name.to_string()
 }
 
 fn first_text_from_tool_content(

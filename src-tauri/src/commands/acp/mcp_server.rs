@@ -1,34 +1,13 @@
-//! In-process HTTP MCP server (step 3 spike, part 2).
+//! In-process HTTP MCP server.
 //!
 //! Stands up an rmcp `StreamableHttpService` on `127.0.0.1:0` (random free
 //! port), serving the 9 tools defined in [`super::tools::AriadneTools`].
+//! Each conversation gets its own bound server scoped to that conversation's
+//! `(scope, conversation_id)`, so tool calls mutate the right row.
+//!
 //! The server is gated by a per-run bearer token and listens only on
 //! loopback (`allowed_hosts = ["127.0.0.1", "localhost", "::1"]` — rmcp
 //! enforces the `Host` check internally to prevent DNS rebinding).
-//!
-//! Usage for the spike (devtools console):
-//!
-//! ```js
-//! const info = JSON.parse(await window.__TAURI__.core.invoke('acp_mcp_server_spike'));
-//! // info = { url: "http://127.0.0.1:NNNNN/mcp", token: "..." }
-//! ```
-//!
-//! Then from a terminal, list the tools:
-//!
-//! ```sh
-//! curl -s -X POST "$URL" \
-//!   -H "Authorization: Bearer $TOKEN" \
-//!   -H "Content-Type: application/json" \
-//!   -H "Accept: application/json, text/event-stream" \
-//!   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0.1"}}}'
-//! # grab the Mcp-Session-Id header from the response, then:
-//! curl -s -X POST "$URL" \
-//!   -H "Authorization: Bearer $TOKEN" \
-//!   -H "Mcp-Session-Id: <id>" \
-//!   -H "Content-Type: application/json" \
-//!   -H "Accept: application/json, text/event-stream" \
-//!   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
-//! ```
 
 use crate::db::Database;
 use axum::{
@@ -40,16 +19,14 @@ use axum::{
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
-use serde_json::json;
 use std::sync::Arc;
-use tauri::State;
 use tokio_util::sync::CancellationToken;
 
 use super::tools::{AriadneTools, Scope};
 
 /// Stand up an MCP server for a single (scope, conversation_id) context.
-/// Returns (url, bearer_token, cancel_token). Drop the cancel_token's guard
-/// or call `.cancel()` to shut the server down.
+/// Returns (url, bearer_token, cancel_token). Drop the cancel_token or call
+/// `.cancel()` to shut the server down.
 pub async fn spawn_mcp_server(
     db: Database,
     scope: Scope,
@@ -106,16 +83,4 @@ async fn bearer_auth(
         return Err(StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(req).await)
-}
-
-/// Spike command: spawn an MCP server with Scope::Profile and return its URL
-/// + bearer token as JSON. The server is never cancelled — it runs until the
-/// app exits. OK for a one-off probe; real integration (step 4) will tie
-/// lifetime to an ACP session.
-#[tauri::command]
-pub async fn acp_mcp_server_spike(db: State<'_, Database>) -> Result<String, String> {
-    let (url, token, _cancel) = spawn_mcp_server((*db).clone(), Scope::Profile, 0).await?;
-    // Intentionally drop (leak) the cancel token so the server keeps running.
-    std::mem::forget(_cancel);
-    Ok(json!({ "url": url, "token": token }).to_string())
 }

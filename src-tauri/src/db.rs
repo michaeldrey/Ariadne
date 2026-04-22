@@ -215,5 +215,17 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current < 6 {
+        // v6: chat backend selection. 'direct' hits Anthropic's Messages API
+        // directly (legacy path); 'acp' routes through claude-code-acp over
+        // the Agent Client Protocol with our in-process MCP server for tools.
+        conn.execute_batch(
+            "
+            ALTER TABLE settings ADD COLUMN agent_backend TEXT DEFAULT 'direct';
+            PRAGMA user_version = 6;
+            ",
+        )?;
+    }
+
     Ok(())
 }

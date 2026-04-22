@@ -9,7 +9,7 @@ pub fn get_settings(db: State<Database>) -> Result<Settings, String> {
     conn.query_row(
         "SELECT anthropic_api_key, jobbot_endpoint, jobbot_api_key, search_backend,
                 resume_content, work_stories, profile_name, profile_json,
-                search_criteria, resume_filename
+                search_criteria, resume_filename, agent_backend
          FROM settings WHERE id = 1",
         [],
         |row| {
@@ -24,6 +24,7 @@ pub fn get_settings(db: State<Database>) -> Result<Settings, String> {
                 profile_json: row.get(7)?,
                 search_criteria: row.get(8)?,
                 resume_filename: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "Resume.pdf".into()),
+                agent_backend: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "direct".into()),
             })
         },
     )
@@ -44,6 +45,7 @@ pub fn update_settings(db: State<Database>, data: UpdateSettings) -> Result<Sett
     if let Some(ref v) = data.profile_json { conn.execute("UPDATE settings SET profile_json = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
     if let Some(ref v) = data.search_criteria { conn.execute("UPDATE settings SET search_criteria = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
     if let Some(ref v) = data.resume_filename { conn.execute("UPDATE settings SET resume_filename = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
+    if let Some(ref v) = data.agent_backend { conn.execute("UPDATE settings SET agent_backend = ?1, updated_at = datetime('now') WHERE id = 1", params![v]).map_err(|e| e.to_string())?; }
 
     drop(conn);
     get_settings(db)
