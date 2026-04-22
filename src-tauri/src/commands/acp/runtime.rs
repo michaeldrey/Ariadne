@@ -472,6 +472,21 @@ fn route_session_update(
                 emit_data_changed(app, label, role_id, &name);
             }
         }
+        SessionUpdate::UsageUpdate(usage) => {
+            // Log context-window usage + any cache info the adapter surfaces
+            // via _meta. Helps verify prompt caching survives the ACP layer
+            // (direct-API path had cache hits on the stable prefix — we
+            // want to confirm the same end-state here).
+            let meta = usage
+                .meta
+                .as_ref()
+                .map(|m| serde_json::to_string(m).unwrap_or_default())
+                .unwrap_or_default();
+            eprintln!(
+                "[acp usage] conv={} used={} size={} cost={:?} meta={}",
+                conversation_id, usage.used, usage.size, usage.cost, meta
+            );
+        }
         _ => {}
     }
 }
