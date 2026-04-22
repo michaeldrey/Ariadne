@@ -1,10 +1,165 @@
 use crate::db::Database;
 use crate::models::*;
 use rusqlite::params;
+use std::time::Duration;
 use tauri::State;
 
 const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
+const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_HTML_BYTES: usize = 400_000;
+
+/// Fetch a job posting URL and use Claude to extract just the JD text,
+/// discarding nav/footer/cookies/etc. Best-effort — works well on static
+/// ATSes (Greenhouse, Lever, Ashby) and plain company career pages; fails
+/// on JS-rendered SPAs (Workday, LinkedIn, Indeed) where the initial HTML
+/// has no content to begin with.
+#[tauri::command]
+pub async fn fetch_jd_from_url(
+    db: State<'_, Database>,
+    url: String,
+) -> Result<String, String> {
+    let api_key: String = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .map_err(|e| e.to_string())?
+        .ok_or("No Anthropic API key configured. Add one in Settings.")?
+    };
+
+    // Polite-but-realistic UA; some boards 403 clearly-bot requests.
+    let client = reqwest::Client::builder()
+        .timeout(FETCH_TIMEOUT)
+        .user_agent("Mozilla/5.0 (Macintosh; Ariadne Job Tracker) AppleWebKit/605.1.15")
+        .build()
+        .map_err(|e| format!("build client: {}", e))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("fetch failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "URL returned {}. This job board may require login or JavaScript.",
+            resp.status()
+        ));
+    }
+    let html = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body: {}", e))?;
+
+    // Strip tags to keep the Claude prompt small. Regex is imprecise but fine
+    // for extraction — Claude is robust to messy text.
+    let cleaned = strip_html(&html);
+    if cleaned.trim().len() < 200 {
+        return Err(
+            "Fetched page has almost no text. Likely a JavaScript-rendered board (Workday, LinkedIn, Indeed). Paste the JD manually.".to_string(),
+        );
+    }
+    let cleaned = truncate_chars(&cleaned, MAX_HTML_BYTES);
+
+    let prompt = format!(
+        r#"You are extracting a job description from a webpage. The page may contain a lot of navigation, cookie notices, and boilerplate around the actual JD.
+
+Return ONLY the job description text, in clean markdown:
+- Role title as an H2 heading if it's clearly identifiable
+- Preserve bullet lists for requirements / responsibilities
+- Drop: navigation links, "About the company" boilerplate that's not specific to the role, cookie/privacy banners, footers, application form fields
+- If the page doesn't appear to be a job posting at all, reply with exactly: NOT_A_JOB_POSTING
+
+## Page content
+{cleaned}
+"#
+    );
+
+    let body = serde_json::json!({
+        "model": CLAUDE_MODEL,
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let resp = client
+        .post(API_URL)
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Claude API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Claude API error ({}): {}", status, text));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let text = json["content"][0]["text"]
+        .as_str()
+        .ok_or("Unexpected API response format")?
+        .trim()
+        .to_string();
+
+    if text == "NOT_A_JOB_POSTING" {
+        return Err(
+            "This page doesn't look like a job posting. Check the URL.".to_string(),
+        );
+    }
+
+    Ok(text)
+}
+
+fn strip_html(html: &str) -> String {
+    // Drop <script> and <style> blocks wholesale, then every remaining tag.
+    let mut s = html.to_string();
+    for tag in ["script", "style", "noscript", "svg"] {
+        let open = format!("<{}", tag);
+        while let Some(start) = s.to_ascii_lowercase().find(&open) {
+            let close = format!("</{}>", tag);
+            if let Some(end_rel) = s[start..].to_ascii_lowercase().find(&close) {
+                let end = start + end_rel + close.len();
+                s.replace_range(start..end, "");
+            } else {
+                break;
+            }
+        }
+    }
+    // Remove all remaining tags.
+    let without_tags: String = {
+        let mut out = String::with_capacity(s.len());
+        let mut in_tag = false;
+        for ch in s.chars() {
+            match ch {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                _ if !in_tag => out.push(ch),
+                _ => {}
+            }
+        }
+        out
+    };
+    // Collapse whitespace.
+    without_tags
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s[..end].to_string()
+    }
+}
 
 #[tauri::command]
 pub async fn tailor_resume(db: State<'_, Database>, role_id: String) -> Result<TailorResult, String> {

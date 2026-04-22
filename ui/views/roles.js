@@ -783,11 +783,22 @@ function renderContentTab(role, field) {
     return;
   }
 
+  // Extra action available on the JD tab: fetch the JD from the role's URL.
+  // Useful when the ATS is static (Greenhouse, Lever, Ashby); fails on
+  // JS-rendered boards, which the backend surfaces in its error message.
+  const showFetchBtn = field.key === 'jd' && role.url && !value;
+  const fetchBtnHtml = showFetchBtn
+    ? `<button class="btn btn-sm" id="btn-fetch-jd" title="Pull the JD text from ${escapeHtml(role.url)}">Fetch from URL</button>`
+    : '';
+
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
         <h4>${field.label}</h4>
-        <button class="btn btn-sm" data-edit-btn="${field.key}">${value ? 'Edit' : 'Add'}</button>
+        <div class="btn-group">
+          ${fetchBtnHtml}
+          <button class="btn btn-sm" data-edit-btn="${field.key}">${value ? 'Edit' : 'Add'}</button>
+        </div>
       </div>
       ${value
         ? `<div class="markdown-content">${renderMarkdown(value)}</div>`
@@ -800,4 +811,26 @@ function renderContentTab(role, field) {
     editingTabs.add(field.key);
     renderContentTab(role, field);
   });
+
+  if (showFetchBtn) {
+    el.querySelector('#btn-fetch-jd').addEventListener('click', async () => {
+      const btn = el.querySelector('#btn-fetch-jd');
+      btn.disabled = true;
+      btn.textContent = 'Fetching…';
+      try {
+        const jd = await invoke('fetch_jd_from_url', { url: role.url });
+        await invoke('update_role', { id: role.id, data: { jd_content: jd } });
+        toast('JD fetched and saved', 'success');
+        // Auto-analysis fires off the JD change (the existing JD-save hook
+        // also handles this when user edits manually).
+        autoAnalyzeRole(role.id);
+        const fresh = await invoke('get_role', { id: role.id });
+        renderContentTab(fresh, field);
+      } catch (err) {
+        toast(err.toString(), 'error');
+        btn.disabled = false;
+        btn.textContent = 'Fetch from URL';
+      }
+    });
+  }
 }

@@ -49,6 +49,7 @@ pub fn run() {
             commands::settings::clear_api_key,
             // Claude AI
             commands::claude::tailor_resume,
+            commands::claude::fetch_jd_from_url,
             commands::claude::generate_research,
             commands::claude::generate_work_stories,
             // Job Search
