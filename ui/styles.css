@@ -194,6 +194,52 @@ h4 { font-size: 14px; font-weight: 600; color: var(--text-secondary); text-trans
 .kpi-card.yellow .kpi-value { color: var(--yellow); }
 .kpi-card.cyan .kpi-value { color: var(--cyan); }
 
+/* ── This Week band ──
+   Replaces the old "Active / Applied / Interviewing / Updated" KPI grid
+   with action-oriented signals. Only renders blocks that have content. */
+.this-week-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.this-week-block {
+  display: block;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.this-week-block:hover { border-color: var(--accent); transform: translateY(-1px); }
+.this-week-block.due { border-left: 3px solid var(--red); }
+.this-week-block.interview { border-left: 3px solid var(--green); }
+.this-week-block.stalled { border-left: 3px solid var(--yellow); }
+.this-week-label { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+.this-week-detail { font-size: 12px; color: var(--text-secondary); }
+.this-week-empty {
+  padding: 14px;
+  margin-bottom: 24px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+/* ── Recent Chats (dashboard) ── */
+.recent-chats { display: flex; flex-direction: column; }
+.recent-chat-item {
+  display: block;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+.recent-chat-item:last-child { border-bottom: none; }
+.recent-chat-item:hover { background: var(--bg-hover); }
+.recent-chat-title { font-weight: 600; margin-bottom: 3px; }
+
 /* ── Pipeline ── */
 .pipeline {
   display: flex;
@@ -370,7 +416,52 @@ textarea {
   font-size: 12px;
 }
 
-/* ── Fit Score ── */
+/* ── Fit Score (table inline) ──
+   Number + proportional colored bar. More scannable at 50+ rows than
+   a solid-color pill. Used in the roles list and the role detail header. */
+.fit-score-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 80px;
+}
+
+.fit-score-num { display: inline-block; width: 24px; text-align: right; }
+
+.fit-score-bar {
+  flex: 1;
+  height: 6px;
+  min-width: 48px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+.fit-score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.fit-score-cell.excellent .fit-score-num,
+.fit-score-cell.strong .fit-score-num { color: var(--green); }
+.fit-score-cell.excellent .fit-score-bar-fill,
+.fit-score-cell.strong .fit-score-bar-fill { background: var(--green); }
+
+.fit-score-cell.good .fit-score-num { color: var(--accent); }
+.fit-score-cell.good .fit-score-bar-fill { background: var(--accent); }
+
+.fit-score-cell.risk .fit-score-num { color: var(--yellow); }
+.fit-score-cell.risk .fit-score-bar-fill { background: var(--yellow); }
+
+.fit-score-cell.weak .fit-score-num { color: var(--red); }
+.fit-score-cell.weak .fit-score-bar-fill { background: var(--red); }
+
+/* Legacy circle pill — still used in the role detail header for a single
+   dominant display (no bar needed for one prominent number). */
 .fit-score {
   display: inline-flex;
   align-items: center;
@@ -519,6 +610,21 @@ textarea {
 .analysis-status .spinner { width: 14px; height: 14px; border-width: 2px; }
 
 .detail-title { font-size: 24px; font-weight: 700; }
+
+/* ── AI actions row ──
+   Always-visible strip of Ariadne's core AI actions (Chat/Tailor/Research)
+   on a role detail page, separated from the header Edit/Delete so the
+   value-add controls aren't competing with destructive-ish ones. */
+.ai-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
 .detail-subtitle { color: var(--text-secondary); font-size: 14px; margin-top: 4px; }
 
 .detail-meta {

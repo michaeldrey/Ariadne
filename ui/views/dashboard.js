@@ -12,22 +12,28 @@ let closedExpanded = false;
 export async function renderDashboard(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading dashboard...</div>';
 
-  const [allRoles, settings] = await Promise.all([
+  const [allRoles, settings, allTasks, recentChats] = await Promise.all([
     invoke('list_roles', { status: null }),
     invoke('get_settings'),
+    invoke('list_tasks', { status: null, roleId: null }),
+    invoke('list_recent_conversations', { limit: 5 }),
   ]);
   const active = allRoles.filter(r => r.status === 'active');
   const closed = allRoles.filter(r => r.status === 'closed');
 
-  const applied = active.filter(r => r.stage !== 'Sourced');
-  const interviewing = active.filter(r =>
-    ['Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'].includes(r.stage)
-  );
-
+  const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
   const weekStr = weekAgo.toISOString().slice(0, 10);
-  const updatedThisWeek = active.filter(r => r.updated_date >= weekStr).length;
+
+  // "This Week" signals, ranked by action-worthiness.
+  const tasksDue = allTasks.filter(t =>
+    t.status === 'pending' && t.due_date && t.due_date <= today
+  );
+  const stalledRoles = active.filter(r => r.updated_date < weekStr);
+  const upcomingInterviews = active.filter(r =>
+    ['Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'].includes(r.stage)
+  );
 
   const stageCounts = {};
   STAGES.forEach(s => stageCounts[s] = 0);
@@ -41,24 +47,7 @@ export async function renderDashboard(container) {
 
     ${showWelcome ? renderWelcomeCard(checklist) : ''}
 
-    <div class="kpi-grid">
-      <div class="kpi-card accent">
-        <div class="kpi-value">${active.length}</div>
-        <div class="kpi-label">Active Roles</div>
-      </div>
-      <div class="kpi-card green">
-        <div class="kpi-value">${applied.length}</div>
-        <div class="kpi-label">Applied</div>
-      </div>
-      <div class="kpi-card cyan">
-        <div class="kpi-value">${interviewing.length}</div>
-        <div class="kpi-label">Interviewing</div>
-      </div>
-      <div class="kpi-card yellow">
-        <div class="kpi-value">${updatedThisWeek}</div>
-        <div class="kpi-label">Updated This Week</div>
-      </div>
-    </div>
+    ${renderThisWeekBand(tasksDue, stalledRoles, upcomingInterviews)}
 
     <div class="pipeline" id="pipeline">
       ${STAGES.map((stage, i) => `
@@ -70,6 +59,8 @@ export async function renderDashboard(container) {
         ${i < STAGES.length - 1 ? '<div class="pipeline-arrow">→</div>' : ''}
       `).join('')}
     </div>
+
+    ${renderRecentChatsCard(recentChats)}
 
     <div class="card">
       <div class="card-header">
@@ -176,12 +167,105 @@ function renderClosedTable(closed) {
   wireRowNav(el);
 }
 
+function renderFitScoreCellInline(score) {
+  if (!score) return '—';
+  const cls = fitScoreClass(score);
+  const pct = Math.max(0, Math.min(100, score));
+  return `
+    <span class="fit-score-cell ${cls}" title="Fit score ${score}">
+      <span class="fit-score-num">${score}</span>
+      <span class="fit-score-bar"><span class="fit-score-bar-fill" style="width:${pct}%"></span></span>
+    </span>
+  `;
+}
+
+function renderThisWeekBand(tasksDue, stalled, interviews) {
+  // Action-oriented replacement for the old KPI grid. Shows only bands that
+  // have content so the dashboard doesn't shout empty zeros at you on day one.
+  const blocks = [];
+  if (tasksDue.length) {
+    const preview = tasksDue.slice(0, 3).map(t => escapeHtml(t.content)).join(', ');
+    const more = tasksDue.length > 3 ? ` +${tasksDue.length - 3} more` : '';
+    blocks.push({
+      cls: 'this-week-block due',
+      label: `${tasksDue.length} task${tasksDue.length === 1 ? '' : 's'} due`,
+      detail: `${preview}${more}`,
+      href: '#/tasks',
+    });
+  }
+  if (interviews.length) {
+    const preview = interviews.slice(0, 3).map(r => escapeHtml(`${r.company} (${r.stage})`)).join(', ');
+    const more = interviews.length > 3 ? ` +${interviews.length - 3} more` : '';
+    blocks.push({
+      cls: 'this-week-block interview',
+      label: `${interviews.length} interview${interviews.length === 1 ? '' : 's'} in flight`,
+      detail: `${preview}${more}`,
+      href: '#/roles',
+    });
+  }
+  if (stalled.length) {
+    const preview = stalled.slice(0, 3).map(r => escapeHtml(`${r.company}`)).join(', ');
+    const more = stalled.length > 3 ? ` +${stalled.length - 3} more` : '';
+    blocks.push({
+      cls: 'this-week-block stalled',
+      label: `${stalled.length} stalled role${stalled.length === 1 ? '' : 's'} (>7 days)`,
+      detail: `${preview}${more}`,
+      href: '#/roles',
+    });
+  }
+
+  if (blocks.length === 0) {
+    return `
+      <div class="this-week-empty text-muted text-sm">
+        Nothing urgent. No tasks due, no interviews in flight, nothing stalled.
+      </div>
+    `;
+  }
+
+  return `
+    <div class="this-week-grid">
+      ${blocks.map(b => `
+        <a class="${b.cls}" href="${b.href}">
+          <div class="this-week-label">${b.label}</div>
+          <div class="this-week-detail">${b.detail}</div>
+        </a>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderRecentChatsCard(recent) {
+  if (!recent || recent.length === 0) return '';
+  return `
+    <div class="card">
+      <div class="card-header">
+        <h3>Recent Chats</h3>
+      </div>
+      <div class="recent-chats">
+        ${recent.map(c => {
+          const scopeLabel = c.scope_type === 'role'
+            ? (c.role_company ? `${escapeHtml(c.role_company)} — ${escapeHtml(c.role_title || '')}` : 'Role chat')
+            : 'Profile';
+          const title = c.title ? escapeHtml(c.title) : '<span class="text-muted">(untitled)</span>';
+          const href = c.scope_type === 'role' && c.role_id ? `#/roles/${c.role_id}` : '#/profile';
+          return `
+            <a class="recent-chat-item" href="${href}">
+              <div class="recent-chat-title">${title}</div>
+              <div class="recent-chat-meta text-muted text-sm">${escapeHtml(scopeLabel)} · ${formatDate(c.updated_at)}</div>
+            </a>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function roleRow(r) {
   return `
     <tr data-href="#/roles/${r.id}">
       <td><strong>${escapeHtml(r.company)}</strong></td>
       <td>${escapeHtml(r.title)}</td>
-      <td>${r.fit_score ? `<span class="fit-score ${fitScoreClass(r.fit_score)}">${r.fit_score}</span>` : '—'}</td>
+      <td>${renderFitScoreCellInline(r.fit_score)}</td>
       <td>
         <select class="stage-inline" data-role-id="${r.id}" data-current="${escapeHtml(r.stage)}" onclick="event.stopPropagation()">
           ${STAGES.map(s => `<option value="${s}" ${s === r.stage ? 'selected' : ''}>${s}</option>`).join('')}

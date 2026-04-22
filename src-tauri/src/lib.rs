@@ -63,6 +63,7 @@ pub fn run() {
             commands::agent::get_or_create_conversation,
             commands::agent::get_or_create_profile_conversation,
             commands::agent::list_conversations,
+            commands::agent::list_recent_conversations,
             commands::agent::create_conversation,
             commands::agent::delete_conversation,
             commands::agent::rename_conversation,

@@ -210,6 +210,19 @@ pub struct Conversation {
     pub updated_at: String,
 }
 
+/// Conversation row joined with role metadata for the dashboard's Recent
+/// Chats band.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentConversation {
+    pub id: i64,
+    pub scope_type: String,
+    pub role_id: Option<String>,
+    pub title: Option<String>,
+    pub updated_at: String,
+    pub role_company: Option<String>,
+    pub role_title: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: i64,

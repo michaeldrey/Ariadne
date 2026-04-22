@@ -17,6 +17,18 @@ const CONTENT_FIELDS = [
 let listSort = { key: 'updated_date', dir: 'desc' };
 let activeTab = 'active';
 
+function renderFitScoreCell(score) {
+  if (!score) return '—';
+  const cls = fitScoreClass(score);
+  const pct = Math.max(0, Math.min(100, score));
+  return `
+    <span class="fit-score-cell ${cls}" title="Fit score ${score}">
+      <span class="fit-score-num">${score}</span>
+      <span class="fit-score-bar"><span class="fit-score-bar-fill" style="width:${pct}%"></span></span>
+    </span>
+  `;
+}
+
 // Background-analysis state. Keyed by role id so renderRoleDetail can
 // re-hydrate the banner if the user navigated away and came back while
 // analysis was still running.
@@ -280,7 +292,7 @@ function activeRow(r) {
     <tr data-href="#/roles/${r.id}">
       <td><strong>${escapeHtml(r.company)}</strong></td>
       <td>${escapeHtml(r.title)}</td>
-      <td>${r.fit_score ? `<span class="fit-score ${fitScoreClass(r.fit_score)}">${r.fit_score}</span>` : '—'}</td>
+      <td>${renderFitScoreCell(r.fit_score)}</td>
       <td>
         <select class="stage-inline" data-role-id="${r.id}" data-current="${escapeHtml(r.stage)}" onclick="event.stopPropagation()">
           ${STAGES.map(s => `<option value="${s}" ${s === r.stage ? 'selected' : ''}>${s}</option>`).join('')}
@@ -675,15 +687,22 @@ function renderRoleHeader(role) {
         </div>
       </div>
       <div class="btn-group">
-        <button class="btn btn-primary btn-sm" id="btn-open-chat">Chat</button>
-        ${role.status === 'active' ? `
-          <button class="btn btn-sm" id="btn-tailor" ${!role.jd_content ? 'disabled title="Add a JD first"' : ''}>Tailor Resume</button>
-          <button class="btn btn-sm" id="btn-research">Research</button>
-        ` : ''}
         <button class="btn btn-sm" id="btn-edit-header">Edit</button>
         <button class="btn btn-danger btn-sm" id="btn-delete-role">Delete</button>
       </div>
     </div>
+
+    ${role.status === 'active' ? `
+      <div class="ai-actions">
+        <button class="btn btn-primary" id="btn-open-chat">Chat</button>
+        <button class="btn" id="btn-tailor" ${!role.jd_content ? 'disabled title="Add a JD first"' : ''}>Tailor Resume</button>
+        <button class="btn" id="btn-research">Research</button>
+      </div>
+    ` : `
+      <div class="ai-actions">
+        <button class="btn btn-primary" id="btn-open-chat">Chat</button>
+      </div>
+    `}
 
     <div class="detail-meta">
       ${role.url ? `<a href="${escapeHtml(role.url)}" target="_blank" class="meta-item" style="color:var(--accent)">Job Posting &nearr;</a>` : ''}

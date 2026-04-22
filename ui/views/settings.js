@@ -62,6 +62,12 @@ export async function renderSettings(container) {
     </div>
 
     <div class="card mb-16">
+      <h3>Account & Sync</h3>
+      <p class="text-muted text-sm mb-8">Ariadne is local-first — your data lives on this machine. Cloud sync across devices is planned but not yet available.</p>
+      <button class="btn btn-sm" disabled title="Not yet available">Sign in</button>
+    </div>
+
+    <div class="card mb-16">
       <h3>Import Data</h3>
       <p class="text-muted text-sm mb-8">Import data from your existing Ariadne JSON files (tracker.json, network.json, tasks.json).</p>
       <div class="btn-group">

@@ -85,6 +85,43 @@ pub fn list_conversations(
     rows.map_err(|e| e.to_string())
 }
 
+/// Most recently updated conversations across all scopes, for the dashboard's
+/// "Recent Chats" band. Joins to roles so the caller can render something
+/// like "Role: Acme — Staff SWE" without a second round-trip.
+#[tauri::command]
+pub fn list_recent_conversations(
+    db: State<'_, Database>,
+    limit: Option<i64>,
+) -> Result<Vec<RecentConversation>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let limit = limit.unwrap_or(5);
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.id, c.scope_type, c.role_id, c.title, c.updated_at,
+                    r.company, r.title AS role_title
+             FROM conversations c
+             LEFT JOIN roles r ON c.role_id = r.id
+             ORDER BY c.updated_at DESC, c.id DESC
+             LIMIT ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![limit], |r| {
+            Ok(RecentConversation {
+                id: r.get(0)?,
+                scope_type: r.get(1)?,
+                role_id: r.get(2)?,
+                title: r.get(3)?,
+                updated_at: r.get(4)?,
+                role_company: r.get(5)?,
+                role_title: r.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn create_conversation(
     db: State<'_, Database>,
