@@ -1,9 +1,8 @@
 import { invoke, escapeHtml, renderMarkdown, toast } from '../app.js';
 
-// Scope shape:
-//   { type: 'role', role: {id, company, title} }
-//   { type: 'profile' }
+// Scope:  { type: 'role', role: {id, company, title} } | { type: 'profile' }
 let currentScope = null;
+let currentConversations = [];  // list of {id, scope_type, role_id, title, created_at, updated_at}
 let currentConversationId = null;
 let unlisten = null;
 let streamingMessageEl = null;
@@ -36,6 +35,7 @@ export async function closeChat() {
   drawer.classList.add('chat-closed');
   drawer.innerHTML = '';
   currentScope = null;
+  currentConversations = [];
   currentConversationId = null;
   streamingMessageEl = null;
   pendingToolBubbles.clear();
@@ -56,7 +56,6 @@ export function getCurrentChatScopeType() {
 // ── Internals ──
 
 async function openScope(scope) {
-  // Idempotent: if already open for same scope, focus input.
   if (sameScope(currentScope, scope)) {
     document.getElementById('chat-input')?.focus();
     return;
@@ -69,47 +68,41 @@ async function openScope(scope) {
   drawer.classList.add('chat-open');
 
   drawer.innerHTML = renderShell(scope);
-
-  document.getElementById('chat-close').addEventListener('click', closeChat);
-  document.getElementById('chat-send').addEventListener('click', sendCurrent);
-
-  drawer.querySelectorAll('.chat-chips-persistent .chat-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const input = document.getElementById('chat-input');
-      input.value = btn.dataset.prompt;
-      input.focus();
-      autoGrow(input);
-    });
-  });
-
-  const input = document.getElementById('chat-input');
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendCurrent();
-    }
-  });
-  input.addEventListener('input', () => autoGrow(input));
+  wireShellHandlers(drawer);
 
   try {
-    const conv = scope.type === 'role'
-      ? await invoke('get_or_create_conversation', { roleId: scope.role.id })
-      : await invoke('get_or_create_profile_conversation');
-    currentConversationId = conv.id;
-    const messages = await invoke('list_messages', { conversationId: conv.id });
+    await loadConversations();
+    if (currentConversations.length === 0) {
+      // Auto-create a first thread so the user has something to send to.
+      const conv = await invoke('create_conversation', { scopeType: scope.type, roleId: scopeRoleId(scope), title: null });
+      currentConversations = [conv];
+    }
+    currentConversationId = currentConversations[0].id;
+    renderThreadPicker();
+    const messages = await invoke('list_messages', { conversationId: currentConversationId });
     renderMessages(messages);
   } catch (err) {
     setStatus(err.toString(), true);
   }
 
   await subscribeToEvents();
-  input.focus();
+  document.getElementById('chat-input')?.focus();
+}
+
+function scopeRoleId(scope) {
+  return scope.type === 'role' ? scope.role.id : null;
+}
+
+async function loadConversations() {
+  const scopeType = currentScope.type;
+  const roleId = scopeRoleId(currentScope);
+  currentConversations = await invoke('list_conversations', { scopeType, roleId });
 }
 
 function renderShell(scope) {
   const header = scope.type === 'role'
-    ? `Chat · ${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`
-    : `Profile Coach`;
+    ? `${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`
+    : 'Profile Coach';
 
   const chips = scope.type === 'role'
     ? [
@@ -132,6 +125,7 @@ function renderShell(scope) {
       <h4>${header}</h4>
       <button class="btn-icon" id="chat-close" title="Close chat">×</button>
     </div>
+    <div class="chat-thread-bar" id="chat-thread-bar"></div>
     <div class="chat-messages" id="chat-messages">
       <div class="chat-empty">Loading…</div>
     </div>
@@ -148,11 +142,142 @@ function renderShell(scope) {
   `;
 }
 
+function wireShellHandlers(drawer) {
+  document.getElementById('chat-close').addEventListener('click', closeChat);
+  document.getElementById('chat-send').addEventListener('click', sendCurrent);
+
+  drawer.querySelectorAll('.chat-chips-persistent .chat-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById('chat-input');
+      input.value = btn.dataset.prompt;
+      input.focus();
+      autoGrow(input);
+    });
+  });
+
+  const input = document.getElementById('chat-input');
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendCurrent();
+    }
+  });
+  input.addEventListener('input', () => autoGrow(input));
+}
+
+function renderThreadPicker() {
+  const bar = document.getElementById('chat-thread-bar');
+  if (!bar) return;
+
+  const options = currentConversations.map(c => {
+    const label = convDisplayTitle(c);
+    const selected = c.id === currentConversationId ? 'selected' : '';
+    return `<option value="${c.id}" ${selected}>${escapeHtml(label)}</option>`;
+  }).join('');
+
+  bar.innerHTML = `
+    <select id="chat-thread-select" title="Switch thread">
+      ${options}
+    </select>
+    <button class="btn-icon" id="chat-thread-new" title="New thread">＋</button>
+    <button class="btn-icon" id="chat-thread-rename" title="Rename thread">✎</button>
+    <button class="btn-icon" id="chat-thread-delete" title="Delete thread">🗑</button>
+  `;
+
+  document.getElementById('chat-thread-select').addEventListener('change', (e) => {
+    switchThread(parseInt(e.target.value, 10));
+  });
+  document.getElementById('chat-thread-new').addEventListener('click', newThread);
+  document.getElementById('chat-thread-rename').addEventListener('click', renameCurrentThread);
+  document.getElementById('chat-thread-delete').addEventListener('click', deleteCurrentThread);
+}
+
+function convDisplayTitle(c) {
+  if (c.title && c.title.trim()) return c.title;
+  // Fallback: compact created_at like "Apr 21 1:15 PM"
+  try {
+    const d = new Date(c.created_at + 'Z');
+    const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return `New chat · ${date} ${time}`;
+  } catch {
+    return 'New chat';
+  }
+}
+
+async function switchThread(conversationId) {
+  if (conversationId === currentConversationId) return;
+  currentConversationId = conversationId;
+  const messages = await invoke('list_messages', { conversationId });
+  renderMessages(messages);
+  // Reflect selection in dropdown (in case call came from elsewhere).
+  const sel = document.getElementById('chat-thread-select');
+  if (sel) sel.value = String(conversationId);
+}
+
+async function newThread() {
+  try {
+    const conv = await invoke('create_conversation', {
+      scopeType: currentScope.type,
+      roleId: scopeRoleId(currentScope),
+      title: null,
+    });
+    currentConversations = [conv, ...currentConversations];
+    currentConversationId = conv.id;
+    renderThreadPicker();
+    renderMessages([]);
+    document.getElementById('chat-input')?.focus();
+  } catch (err) {
+    toast(err.toString(), 'error');
+  }
+}
+
+async function renameCurrentThread() {
+  const current = currentConversations.find(c => c.id === currentConversationId);
+  const existing = current?.title || '';
+  const next = prompt('Rename thread', existing);
+  if (next === null) return;
+  const title = next.trim();
+  try {
+    await invoke('rename_conversation', { conversationId: currentConversationId, title: title || '' });
+    if (current) current.title = title || null;
+    renderThreadPicker();
+  } catch (err) {
+    toast(err.toString(), 'error');
+  }
+}
+
+async function deleteCurrentThread() {
+  const current = currentConversations.find(c => c.id === currentConversationId);
+  const label = current ? convDisplayTitle(current) : 'this thread';
+  if (!confirm(`Delete "${label}"? This cannot be undone.`)) return;
+  try {
+    await invoke('delete_conversation', { conversationId: currentConversationId });
+    currentConversations = currentConversations.filter(c => c.id !== currentConversationId);
+    if (currentConversations.length === 0) {
+      // Create a fresh empty thread so the drawer is never in a no-thread state.
+      const conv = await invoke('create_conversation', {
+        scopeType: currentScope.type,
+        roleId: scopeRoleId(currentScope),
+        title: null,
+      });
+      currentConversations = [conv];
+    }
+    currentConversationId = currentConversations[0].id;
+    renderThreadPicker();
+    const messages = await invoke('list_messages', { conversationId: currentConversationId });
+    renderMessages(messages);
+    toast('Thread deleted', 'success');
+  } catch (err) {
+    toast(err.toString(), 'error');
+  }
+}
+
 function sameScope(a, b) {
   if (!a || !b) return false;
   if (a.type !== b.type) return false;
   if (a.type === 'role') return a.role.id === b.role.id;
-  return true; // profile scope is singleton
+  return true;
 }
 
 async function sendAfterOpen(text) {
@@ -172,6 +297,13 @@ async function subscribeToEvents() {
 function handleEvent(evt) {
   const container = document.getElementById('chat-messages');
   if (!container) return;
+
+  // Filter events to the currently-active thread so other conversations
+  // finishing in the background don't scribble into this view.
+  if (evt.conversation_id != null && currentConversationId != null
+      && evt.conversation_id !== currentConversationId) {
+    return;
+  }
 
   switch (evt.type) {
     case 'turn_started': {
@@ -282,23 +414,31 @@ function removeStreamingCursor() {
 async function sendCurrent() {
   const input = document.getElementById('chat-input');
   const text = input?.value.trim();
-  if (!text || !currentScope) return;
+  if (!text || !currentConversationId) return;
 
   const container = document.getElementById('chat-messages');
   const empty = container?.querySelector('.chat-empty');
   if (empty) empty.remove();
   appendUserMessage(container, text);
 
+  // If this is the first user message of an untitled thread, auto-title it
+  // from the prompt so the picker dropdown shows something meaningful.
+  const current = currentConversations.find(c => c.id === currentConversationId);
+  if (current && !current.title) {
+    const autoTitle = text.slice(0, 50) + (text.length > 50 ? '…' : '');
+    try {
+      await invoke('rename_conversation', { conversationId: currentConversationId, title: autoTitle });
+      current.title = autoTitle;
+      renderThreadPicker();
+    } catch { /* best-effort */ }
+  }
+
   input.value = '';
   autoGrow(input);
   setStatus('Thinking…');
 
   try {
-    if (currentScope.type === 'role') {
-      await invoke('send_message', { roleId: currentScope.role.id, userText: text });
-    } else {
-      await invoke('send_profile_message', { userText: text });
-    }
+    await invoke('send_to_conversation', { conversationId: currentConversationId, userText: text });
   } catch (err) {
     setStatus(err.toString(), true);
   }
@@ -322,8 +462,8 @@ function renderMessages(messages) {
 
   if (!messages || messages.length === 0) {
     const hint = currentScope?.type === 'profile'
-      ? `Talk to your Profile Coach. Try a suggestion below, or ask anything.`
-      : `Start a conversation about this role. Pick a suggestion below or ask anything.`;
+      ? 'Talk to your Profile Coach. Try a suggestion below, or ask anything.'
+      : 'Start a conversation about this role. Pick a suggestion below or ask anything.';
     container.innerHTML = `<div class="chat-empty"><p>${hint}</p></div>`;
     return;
   }

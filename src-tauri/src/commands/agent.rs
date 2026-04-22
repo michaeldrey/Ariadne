@@ -35,7 +35,7 @@ pub fn get_or_create_conversation(
     role_id: String,
 ) -> Result<Conversation, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    upsert_role_conversation(&conn, &role_id).map_err(|e| e.to_string())
+    most_recent_or_create_role_conversation(&conn, &role_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -43,7 +43,110 @@ pub fn get_or_create_profile_conversation(
     db: State<'_, Database>,
 ) -> Result<Conversation, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    upsert_profile_conversation(&conn).map_err(|e| e.to_string())
+    most_recent_or_create_profile_conversation(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_conversations(
+    db: State<'_, Database>,
+    scope_type: String,
+    role_id: Option<String>,
+) -> Result<Vec<Conversation>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    let (sql, rows): (&str, rusqlite::Result<Vec<Conversation>>) = match scope_type.as_str() {
+        "role" => {
+            let role_id = role_id.ok_or("role_id required for scope_type='role'")?;
+            let sql = "SELECT id, scope_type, role_id, title, created_at, updated_at
+                       FROM conversations WHERE scope_type = 'role' AND role_id = ?1
+                       ORDER BY updated_at DESC, id DESC";
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![role_id], row_to_conversation)
+                .map_err(|e| e.to_string())?
+                .collect();
+            (sql, rows)
+        }
+        "profile" => {
+            let sql = "SELECT id, scope_type, role_id, title, created_at, updated_at
+                       FROM conversations WHERE scope_type = 'profile'
+                       ORDER BY updated_at DESC, id DESC";
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], row_to_conversation)
+                .map_err(|e| e.to_string())?
+                .collect();
+            (sql, rows)
+        }
+        other => return Err(format!("Unknown scope_type: {}", other)),
+    };
+
+    let _ = sql;
+    rows.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_conversation(
+    db: State<'_, Database>,
+    scope_type: String,
+    role_id: Option<String>,
+    title: Option<String>,
+) -> Result<Conversation, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+
+    match scope_type.as_str() {
+        "role" => {
+            let role_id = role_id.ok_or("role_id required for scope_type='role'")?;
+            conn.execute(
+                "INSERT INTO conversations (scope_type, role_id, title) VALUES ('role', ?1, ?2)",
+                params![role_id, title],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        "profile" => {
+            conn.execute(
+                "INSERT INTO conversations (scope_type, role_id, title) VALUES ('profile', NULL, ?1)",
+                params![title],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        other => return Err(format!("Unknown scope_type: {}", other)),
+    }
+
+    let id = conn.last_insert_rowid();
+    conn.query_row(
+        "SELECT id, scope_type, role_id, title, created_at, updated_at
+         FROM conversations WHERE id = ?1",
+        params![id],
+        row_to_conversation,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_conversation(
+    db: State<'_, Database>,
+    conversation_id: i64,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM conversations WHERE id = ?1", params![conversation_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rename_conversation(
+    db: State<'_, Database>,
+    conversation_id: i64,
+    title: String,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE conversations SET title = ?1, updated_at = datetime('now') WHERE id = ?2",
+        params![title, conversation_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -91,56 +194,69 @@ pub fn list_artifacts(
 }
 
 #[tauri::command]
-pub async fn send_message(
+pub async fn send_to_conversation(
     db: State<'_, Database>,
     app: AppHandle,
-    role_id: String,
+    conversation_id: i64,
     user_text: String,
 ) -> Result<(), String> {
-    run_turn(db, app, Scope::Role(role_id), user_text).await
-}
+    // Resolve scope from the conversation row — lets the frontend pass just
+    // conversation_id and we figure out role/profile internally.
+    let scope = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let (scope_type, role_id): (String, Option<String>) = conn
+            .query_row(
+                "SELECT scope_type, role_id FROM conversations WHERE id = ?1",
+                params![conversation_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        match scope_type.as_str() {
+            "role" => {
+                let role_id = role_id.ok_or("Role conversation has no role_id")?;
+                Scope::Role(role_id)
+            }
+            "profile" => Scope::Profile,
+            other => return Err(format!("Unknown scope_type: {}", other)),
+        }
+    };
 
-#[tauri::command]
-pub async fn send_profile_message(
-    db: State<'_, Database>,
-    app: AppHandle,
-    user_text: String,
-) -> Result<(), String> {
-    run_turn(db, app, Scope::Profile, user_text).await
+    run_turn_for_conversation(db, app, scope, conversation_id, user_text).await
 }
 
 // ── Turn runner (shared between role + profile scopes) ──
 
-async fn run_turn(
+async fn run_turn_for_conversation(
     db: State<'_, Database>,
     app: AppHandle,
     scope: Scope,
+    conversation_id: i64,
     user_text: String,
 ) -> Result<(), String> {
-    let (conversation_id, api_key, mut api_messages) = {
+    let (api_key, mut api_messages) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let conv = match &scope {
-            Scope::Role(role_id) => upsert_role_conversation(&conn, role_id),
-            Scope::Profile => upsert_profile_conversation(&conn),
-        }
-        .map_err(|e: rusqlite::Error| e.to_string())?;
 
         let user_content = json!([{"type": "text", "text": user_text}]);
         let user_msg_id =
-            save_message(&conn, conv.id, "user", &user_content).map_err(|e| e.to_string())?;
+            save_message(&conn, conversation_id, "user", &user_content).map_err(|e| e.to_string())?;
 
         emit(
             &app,
-            json!({"type": "user_message_saved", "message_id": user_msg_id, "content": user_content}),
+            json!({
+                "type": "user_message_saved",
+                "conversation_id": conversation_id,
+                "message_id": user_msg_id,
+                "content": user_content,
+            }),
         );
 
         let key: Option<String> = conn
             .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
 
-        let api_msgs = load_messages_as_api_format(&conn, conv.id).map_err(|e| e.to_string())?;
+        let api_msgs = load_messages_as_api_format(&conn, conversation_id).map_err(|e| e.to_string())?;
 
-        (conv.id, key, api_msgs)
+        (key, api_msgs)
     };
 
     let api_key = api_key.ok_or_else(|| {
@@ -189,7 +305,7 @@ async fn run_turn(
             .await
             .map_err(|e| {
                 let msg = format!("API request failed: {}", e);
-                emit(&app, json!({"type": "error", "message": msg.clone()}));
+                emit(&app, json!({"type": "error", "conversation_id": conversation_id, "message": msg.clone()}));
                 msg
             })?;
 
@@ -197,7 +313,7 @@ async fn run_turn(
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             let msg = format!("Claude API error ({}): {}", status, text);
-            emit(&app, json!({"type": "error", "message": msg.clone()}));
+            emit(&app, json!({"type": "error", "conversation_id": conversation_id, "message": msg.clone()}));
             return Err(msg);
         }
 
@@ -214,6 +330,7 @@ async fn run_turn(
             &app,
             json!({
                 "type": "assistant_message_saved",
+                "conversation_id": conversation_id,
                 "message_id": assistant_msg_id,
                 "content": assistant_content,
             }),
@@ -238,6 +355,7 @@ async fn run_turn(
                     &app,
                     json!({
                         "type": "tool_results_saved",
+                        "conversation_id": conversation_id,
                         "message_id": user_msg_id,
                         "content": user_content,
                     }),
@@ -245,13 +363,13 @@ async fn run_turn(
                 api_messages.push(json!({"role": "user", "content": user_content}));
                 if iteration == MAX_TOOL_ITERATIONS - 1 {
                     let msg = "Stopped after max tool iterations".to_string();
-                    emit(&app, json!({"type": "error", "message": msg.clone()}));
+                    emit(&app, json!({"type": "error", "conversation_id": conversation_id, "message": msg.clone()}));
                     return Err(msg);
                 }
             }
             Some(other) => {
                 let msg = format!("Unexpected stop_reason: {}", other);
-                emit(&app, json!({"type": "error", "message": msg.clone()}));
+                emit(&app, json!({"type": "error", "conversation_id": conversation_id, "message": msg.clone()}));
                 return Err(msg);
             }
         }
@@ -326,12 +444,13 @@ async fn consume_stream(
                             app,
                             json!({
                                 "type": "tool_call_start",
+                                "conversation_id": conversation_id,
                                 "tool_use_id": block["id"],
                                 "name": block["name"],
                             }),
                         );
                     } else if block_type == "text" {
-                        emit(app, json!({"type": "text_start"}));
+                        emit(app, json!({"type": "text_start", "conversation_id": conversation_id}));
                     }
                 }
                 "content_block_delta" => {
@@ -345,7 +464,7 @@ async fn consume_stream(
                                 let existing = block["text"].as_str().unwrap_or("").to_string();
                                 block["text"] = Value::String(existing + text);
                             }
-                            emit(app, json!({"type": "text_delta", "text": text}));
+                            emit(app, json!({"type": "text_delta", "conversation_id": conversation_id, "text": text}));
                         }
                         "input_json_delta" => {
                             let partial = delta["partial_json"].as_str().unwrap_or("");
@@ -385,6 +504,7 @@ async fn consume_stream(
                                 app,
                                 json!({
                                     "type": "tool_call_result",
+                                    "conversation_id": conversation_id,
                                     "tool_use_id": tool_use_id,
                                     "name": tool_name,
                                     "input": input,
@@ -896,41 +1016,51 @@ Use this markdown shape. If the user already has stories in a different shape, p
 
 // ── Helpers ──
 
-fn upsert_role_conversation(conn: &Connection, role_id: &str) -> rusqlite::Result<Conversation> {
-    if let Ok(c) = load_conversation_by_role(conn, role_id) {
+fn most_recent_or_create_role_conversation(
+    conn: &Connection,
+    role_id: &str,
+) -> rusqlite::Result<Conversation> {
+    if let Ok(c) = most_recent_role_conversation(conn, role_id) {
         return Ok(c);
     }
     conn.execute(
         "INSERT INTO conversations (scope_type, role_id) VALUES ('role', ?1)",
         params![role_id],
     )?;
-    load_conversation_by_role(conn, role_id)
+    most_recent_role_conversation(conn, role_id)
 }
 
-fn upsert_profile_conversation(conn: &Connection) -> rusqlite::Result<Conversation> {
-    if let Ok(c) = load_profile_conversation(conn) {
+fn most_recent_or_create_profile_conversation(
+    conn: &Connection,
+) -> rusqlite::Result<Conversation> {
+    if let Ok(c) = most_recent_profile_conversation(conn) {
         return Ok(c);
     }
     conn.execute(
         "INSERT INTO conversations (scope_type, role_id) VALUES ('profile', NULL)",
         [],
     )?;
-    load_profile_conversation(conn)
+    most_recent_profile_conversation(conn)
 }
 
-fn load_conversation_by_role(conn: &Connection, role_id: &str) -> rusqlite::Result<Conversation> {
+fn most_recent_role_conversation(
+    conn: &Connection,
+    role_id: &str,
+) -> rusqlite::Result<Conversation> {
     conn.query_row(
         "SELECT id, scope_type, role_id, title, created_at, updated_at
-         FROM conversations WHERE role_id = ?1 AND scope_type = 'role'",
+         FROM conversations WHERE role_id = ?1 AND scope_type = 'role'
+         ORDER BY updated_at DESC, id DESC LIMIT 1",
         params![role_id],
         row_to_conversation,
     )
 }
 
-fn load_profile_conversation(conn: &Connection) -> rusqlite::Result<Conversation> {
+fn most_recent_profile_conversation(conn: &Connection) -> rusqlite::Result<Conversation> {
     conn.query_row(
         "SELECT id, scope_type, role_id, title, created_at, updated_at
-         FROM conversations WHERE scope_type = 'profile' LIMIT 1",
+         FROM conversations WHERE scope_type = 'profile'
+         ORDER BY updated_at DESC, id DESC LIMIT 1",
         [],
         row_to_conversation,
     )

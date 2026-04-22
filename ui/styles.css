@@ -790,6 +790,31 @@ thead th[data-sort-key] {
   margin: 0;
 }
 
+.chat-thread-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.chat-thread-bar select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+}
+
+.chat-thread-bar .btn-icon {
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;

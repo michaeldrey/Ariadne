@@ -60,10 +60,13 @@ pub fn run() {
             // Agent chat
             commands::agent::get_or_create_conversation,
             commands::agent::get_or_create_profile_conversation,
+            commands::agent::list_conversations,
+            commands::agent::create_conversation,
+            commands::agent::delete_conversation,
+            commands::agent::rename_conversation,
             commands::agent::list_messages,
             commands::agent::list_artifacts,
-            commands::agent::send_message,
-            commands::agent::send_profile_message,
+            commands::agent::send_to_conversation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

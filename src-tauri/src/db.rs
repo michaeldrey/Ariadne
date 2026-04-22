@@ -199,5 +199,17 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current < 5 {
+        // v5: conversations no longer unique per scope — allow many threads per role
+        // and many profile conversations. Frontend picks the active one.
+        conn.execute_batch(
+            "
+            DROP INDEX IF EXISTS idx_conv_role;
+            DROP INDEX IF EXISTS idx_conv_profile;
+            PRAGMA user_version = 5;
+            ",
+        )?;
+    }
+
     Ok(())
 }
