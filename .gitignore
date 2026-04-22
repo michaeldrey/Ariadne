@@ -20,7 +20,6 @@ Thumbs.db
 
 # Tauri
 src-tauri/gen/
-src-tauri/icons/
 
 # Data (user-specific, lives in app data dir — never in repo)
 *.db
