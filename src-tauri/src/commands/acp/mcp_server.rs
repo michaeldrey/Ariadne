@@ -20,6 +20,7 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use std::sync::Arc;
+use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::tools::{AriadneTools, Scope};
@@ -31,14 +32,16 @@ pub async fn spawn_mcp_server(
     db: Database,
     scope: Scope,
     conversation_id: i64,
+    app: AppHandle,
 ) -> Result<(String, String, CancellationToken), String> {
     let token = nanoid::nanoid!(32);
     let cancel = CancellationToken::new();
 
     let factory_db = db.clone();
     let factory_scope = scope.clone();
+    let factory_app = app.clone();
     let service = StreamableHttpService::new(
-        move || Ok(AriadneTools::new(factory_db.clone(), factory_scope.clone(), conversation_id)),
+        move || Ok(AriadneTools::new(factory_db.clone(), factory_scope.clone(), conversation_id, factory_app.clone())),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default().with_cancellation_token(cancel.child_token()),
     );

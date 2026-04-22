@@ -174,10 +174,12 @@ function wireShellHandlers(drawer) {
 
   drawer.querySelectorAll('.chat-chips-persistent .chat-chip').forEach(btn => {
     btn.addEventListener('click', () => {
+      // Submit directly — the chip IS the prompt; no reason to stage it in
+      // the input. User can still type custom prompts via the textarea.
       const input = document.getElementById('chat-input');
       input.value = btn.dataset.prompt;
-      input.focus();
       autoGrow(input);
+      sendCurrent();
     });
   });
 

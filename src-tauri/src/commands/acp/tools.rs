@@ -19,6 +19,7 @@ use rusqlite::params;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone)]
 pub enum Scope {
@@ -32,15 +33,17 @@ pub struct AriadneTools {
     pub db: Database,
     pub scope: Scope,
     pub conversation_id: i64,
+    pub app: AppHandle,
     pub tool_router: ToolRouter<AriadneTools>,
 }
 
 impl AriadneTools {
-    pub fn new(db: Database, scope: Scope, conversation_id: i64) -> Self {
+    pub fn new(db: Database, scope: Scope, conversation_id: i64, app: AppHandle) -> Self {
         Self {
             db,
             scope,
             conversation_id,
+            app,
             tool_router: Self::tool_router(),
         }
     }
@@ -126,6 +129,37 @@ struct UpdateSearchCriteriaParams {
 struct UpdateProfileAboutParams {
     /// Full markdown for the user's profile 'about' section.
     content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+struct JobMatch {
+    /// Role title, e.g. "Staff Software Engineer, Platform".
+    title: String,
+    /// Company name.
+    company: String,
+    /// Direct URL to the job posting. Must be a real posting URL, not a search page.
+    url: String,
+    /// City / country / "Remote" string, if available.
+    #[serde(default)]
+    location: Option<String>,
+    /// True if the role is explicitly remote; false if explicitly on-site; omit if unclear.
+    #[serde(default)]
+    remote: Option<bool>,
+    /// Salary range string, e.g. "$250k-$320k + equity". Omit if not posted.
+    #[serde(default)]
+    salary: Option<String>,
+    /// Posted date in YYYY-MM-DD if visible on the page; omit if unknown.
+    #[serde(default)]
+    posted_date: Option<String>,
+    /// One-sentence rationale tying the match to the user's criteria.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct ReportJobMatchesParams {
+    /// All matches found in this search, ordered best-fit first.
+    matches: Vec<JobMatch>,
 }
 
 // ── Tool implementations ──
@@ -391,6 +425,21 @@ impl AriadneTools {
         Ok(CallToolResult::success(vec![Content::text(
             "Profile 'about' updated".to_string(),
         )]))
+    }
+
+    #[tool(description = "Report job matches found during web search. Populates the Job Search results table in the UI with a row per match. Pass ALL matches in a single call (don't call incrementally). Profile-scoped chats only.")]
+    async fn report_job_matches(
+        &self,
+        Parameters(p): Parameters<ReportJobMatchesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_profile()?;
+        let count = p.matches.len();
+        let payload = serde_json::to_value(&p.matches)
+            .unwrap_or_else(|_| serde_json::json!([]));
+        let _ = self.app.emit("jobs:matched", payload);
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reported {} job matches to the UI", count
+        ))]))
     }
 }
 

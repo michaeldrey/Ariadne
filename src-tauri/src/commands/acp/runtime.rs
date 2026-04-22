@@ -223,10 +223,10 @@ impl AcpRuntime {
             }
         }
 
-        let connection = self.ensure_connected(app, db.clone()).await?;
+        let connection = self.ensure_connected(app.clone(), db.clone()).await?;
 
         let scope_for_index = scope.clone();
-        let (url, token, cancel) = spawn_mcp_server(db, scope, conversation_id).await?;
+        let (url, token, cancel) = spawn_mcp_server(db, scope, conversation_id, app).await?;
 
         let cwd = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("/"));
