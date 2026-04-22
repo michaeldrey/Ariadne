@@ -378,6 +378,13 @@ td {
 
 .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ── Job Search tier grid ── */
+.search-tier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
 /* ── Settings two-pane layout ──
    Linear-style: left nav with section labels, right content area. */
 .settings-layout {

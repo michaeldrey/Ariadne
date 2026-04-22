@@ -1,29 +1,86 @@
 import { invoke, escapeHtml, toast } from '../app.js';
+import { openProfileChatAndSend } from './chat.js';
 
 let searchResults = null;
+let aiSearching = false;
 
 export async function renderSearch(container) {
+  const settings = await invoke('get_settings');
+  const hasCriteria = (settings.search_criteria || '').trim().length > 0;
+  const hasApiKey = (settings.anthropic_api_key || '').trim().length > 0;
+  const jobbotConfigured = settings.search_backend === 'jobbot'
+    && (settings.jobbot_endpoint || '').trim().length > 0;
+
   container.innerHTML = `
-    <div class="flex-between mb-16">
-      <h2>Job Search</h2>
-      <button class="btn btn-primary" id="btn-run-search">Run Search</button>
+    <h2>Job Search</h2>
+    <p class="text-muted text-sm mb-16">Two ways to find roles: AI search is always free; JobBot is a paid backend you plug in.</p>
+
+    <div class="search-tier-grid">
+      <div class="card">
+        <div class="card-header">
+          <h3>AI Search <span class="badge badge-good">Free</span></h3>
+        </div>
+        <p class="text-muted text-sm mb-16">Claude reads your Search Criteria from Profile and scans the web for roles that match. Findings come back in chat — click a URL to open it, then Add Role + paste the URL to auto-fetch the JD and run analysis.</p>
+        <div class="text-sm mb-16">
+          <div class="text-muted">Uses:</div>
+          <ul style="margin:4px 0 0 18px;padding:0">
+            <li>Your <a href="#/profile" style="color:var(--accent)">search criteria</a> ${hasCriteria ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— not set yet</span>'}</li>
+            <li>Anthropic API key ${hasApiKey ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— not set yet</span>'}</li>
+          </ul>
+        </div>
+        <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasApiKey) ? 'disabled' : ''}>
+          ${aiSearching ? 'Searching…' : 'Start AI Search'}
+        </button>
+        ${(!hasCriteria || !hasApiKey) ? `
+          <p class="text-muted text-sm mt-8">Fill in missing pieces above to enable.</p>
+        ` : ''}
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>JobBot <span class="badge badge-strong">Premium</span></h3>
+        </div>
+        <p class="text-muted text-sm mb-16">Curated feed from a paid search API. Configure your endpoint + API key in <a href="#/settings" style="color:var(--accent)">Settings → Integrations</a>, then run below.</p>
+        ${jobbotConfigured ? `
+          <button class="btn btn-primary" id="btn-jobbot-search">Run JobBot Search</button>
+        ` : `
+          <p class="text-muted text-sm mb-16">Status: not configured. Configure an endpoint + key in Settings, or skip — AI Search covers the free case.</p>
+          <a href="#/settings" class="btn btn-sm">Configure JobBot</a>
+        `}
+      </div>
     </div>
 
-    <div id="search-results">
-      ${searchResults ? renderResults(searchResults) : `
-        <div class="empty-state">
-          <div class="icon">&#8981;</div>
-          <p>Click "Run Search" to find new roles via JobBot API</p>
-          <p class="text-sm text-muted">Configure your JobBot credentials in Settings first</p>
-        </div>
-      `}
+    <div id="search-results" class="mt-16">
+      ${searchResults ? renderResults(searchResults) : ''}
     </div>
   `;
 
-  document.getElementById('btn-run-search').addEventListener('click', async () => {
+  document.getElementById('btn-ai-search')?.addEventListener('click', async () => {
+    aiSearching = true;
+    const btn = document.getElementById('btn-ai-search');
+    btn.disabled = true;
+    btn.textContent = 'Searching…';
+    const prompt = `Use my search criteria (you already have it in context) to find 5-10 open job postings on the public web. For each match, give me:
+
+- Company and role title
+- Direct URL to the posting (not a search results page)
+- One-sentence reason it fits my criteria
+
+Skip anything that's obviously stale, posted on LinkedIn (the URL won't work), or behind a login wall. Order by best-fit first.`;
+    try {
+      await openProfileChatAndSend(prompt);
+    } catch (err) {
+      toast(err.toString(), 'error');
+    } finally {
+      aiSearching = false;
+      // Button state will be reset on next re-render; in the meantime it
+      // stays disabled, which is correct while the chat runs.
+    }
+  });
+
+  document.getElementById('btn-jobbot-search')?.addEventListener('click', async () => {
     const resultsDiv = document.getElementById('search-results');
     resultsDiv.innerHTML = '<div class="loading"><div class="spinner"></div> Searching for jobs...</div>';
-
     try {
       searchResults = await invoke('run_job_search');
       resultsDiv.innerHTML = renderResults(searchResults);
@@ -38,7 +95,6 @@ export async function renderSearch(container) {
 
 function renderResults(results) {
   const { jobs, meta } = results;
-
   return `
     <div class="card mb-16">
       <p class="text-sm">
@@ -87,7 +143,6 @@ function renderResults(results) {
 
 function wireUpResults(container) {
   if (!searchResults) return;
-
   container.querySelectorAll('.btn-setup').forEach(btn => {
     btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.index);
