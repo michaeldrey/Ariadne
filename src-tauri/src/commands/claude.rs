@@ -5,9 +5,77 @@ use std::time::Duration;
 use tauri::State;
 
 const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+const HAIKU_MODEL: &str = "claude-haiku-4-5-20251001";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HTML_BYTES: usize = 400_000;
+
+/// Generate a 4-7 word chat-thread title from the user's first message.
+/// Haiku-backed — cheap and fast so the picker updates within a second
+/// or two of sending. Returns a plain string with no quotes or trailing
+/// punctuation.
+#[tauri::command]
+pub async fn summarize_for_title(
+    db: State<'_, Database>,
+    text: String,
+) -> Result<String, String> {
+    let api_key: String = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .map_err(|e| e.to_string())?
+        .ok_or("No Anthropic API key configured. Add one in Settings.")?
+    };
+
+    let body = serde_json::json!({
+        "model": HAIKU_MODEL,
+        "max_tokens": 30,
+        "messages": [{
+            "role": "user",
+            "content": format!(
+                "Write a 4-7 word title for a chat thread that starts with this message. \
+                 No quotes, no trailing period, Title Case. Reply with ONLY the title text.\n\n{}",
+                text
+            )
+        }]
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(FETCH_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .post(API_URL)
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("title API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Claude API error ({}): {}", status, text));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let title = json["content"][0]["text"]
+        .as_str()
+        .ok_or("Unexpected API response format")?
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches('.')
+        .to_string();
+
+    if title.is_empty() {
+        return Err("Claude returned an empty title".to_string());
+    }
+    Ok(title)
+}
 
 /// Fetch a job posting URL and use Claude to extract just the JD text,
 /// discarding nav/footer/cookies/etc. Best-effort — works well on static

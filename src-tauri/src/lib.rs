@@ -50,6 +50,7 @@ pub fn run() {
             // Claude AI
             commands::claude::tailor_resume,
             commands::claude::fetch_jd_from_url,
+            commands::claude::summarize_for_title,
             commands::claude::generate_research,
             commands::claude::generate_work_stories,
             // Job Search

@@ -421,16 +421,29 @@ async function sendCurrent() {
   if (empty) empty.remove();
   appendUserMessage(container, text);
 
-  // If this is the first user message of an untitled thread, auto-title it
-  // from the prompt so the picker dropdown shows something meaningful.
+  // If this is the first user message of an untitled thread, auto-title it.
+  // Immediate fallback from a slice so the picker isn't blank, then kick
+  // off a Haiku-backed summary in the background and overwrite when it
+  // returns. Fail silently — a mediocre title is still better than nothing.
   const current = currentConversations.find(c => c.id === currentConversationId);
   if (current && !current.title) {
-    const autoTitle = text.slice(0, 50) + (text.length > 50 ? '…' : '');
+    const fallback = text.slice(0, 50) + (text.length > 50 ? '…' : '');
     try {
-      await invoke('rename_conversation', { conversationId: currentConversationId, title: autoTitle });
-      current.title = autoTitle;
+      await invoke('rename_conversation', { conversationId: currentConversationId, title: fallback });
+      current.title = fallback;
       renderThreadPicker();
     } catch { /* best-effort */ }
+
+    const convId = currentConversationId;
+    invoke('summarize_for_title', { text }).then(async (title) => {
+      if (!title || title === fallback) return;
+      try {
+        await invoke('rename_conversation', { conversationId: convId, title });
+        // Only rename in the cache if the user is still viewing this thread.
+        const c = currentConversations.find(x => x.id === convId);
+        if (c) { c.title = title; renderThreadPicker(); }
+      } catch { /* fallback stays */ }
+    }).catch(() => { /* fallback stays */ });
   }
 
   input.value = '';
