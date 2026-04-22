@@ -17,28 +17,49 @@ const CONTENT_FIELDS = [
 let listSort = { key: 'updated_date', dir: 'desc' };
 let activeTab = 'active';
 
-// Background-analysis throttle: prevent firing a second tailor_resume for
-// the same role while one is already in flight.
+// Background-analysis state. Keyed by role id so renderRoleDetail can
+// re-hydrate the banner if the user navigated away and came back while
+// analysis was still running.
 const analyzingRoles = new Set();
+
+function setAnalysisBanner(state, message) {
+  const el = document.getElementById('analysis-status');
+  if (!el) return;
+  el.className = `analysis-status analysis-${state}`;
+  const icon = state === 'running' ? '<div class="spinner"></div>'
+    : state === 'success' ? '<span style="color:var(--green)">✓</span>'
+    : state === 'error' ? '<span style="color:var(--red)">✕</span>'
+    : '';
+  el.innerHTML = `${icon}<span>${escapeHtml(message)}</span>`;
+}
+
+function hideAnalysisBanner() {
+  const el = document.getElementById('analysis-status');
+  if (el) el.className = 'analysis-status hidden';
+}
 
 async function autoAnalyzeRole(roleId) {
   if (analyzingRoles.has(roleId)) return;
   analyzingRoles.add(roleId);
-  toast('Analyzing JD…', 'info');
+  setAnalysisBanner('running', 'Analyzing JD — generating analysis + fit score…');
   try {
     await invoke('tailor_resume', { roleId });
-    toast('Analysis + fit score updated', 'success');
+    analyzingRoles.delete(roleId);
     // Re-render the current role detail if we're still on it. The data:changed
     // subscription doesn't fire for tailor_resume because it mutates columns
     // directly (not via a tool call), so we re-fetch manually.
     const container = document.getElementById('view-container');
     if (container && location.hash === `#/roles/${roleId}`) {
-      renderRoleDetail(container, roleId);
+      await renderRoleDetail(container, roleId);
+      setAnalysisBanner('success', 'Analysis + fit score updated');
+      setTimeout(() => {
+        // Only auto-hide if no newer analysis has started for this role.
+        if (!analyzingRoles.has(roleId)) hideAnalysisBanner();
+      }, 5000);
     }
   } catch (err) {
-    toast(`Analysis failed: ${err}`, 'error');
-  } finally {
     analyzingRoles.delete(roleId);
+    setAnalysisBanner('error', `Analysis failed: ${err}`);
   }
 }
 
@@ -369,12 +390,15 @@ export async function renderRoleDetail(container, id) {
   }
 
   const roleTasks = await invoke('list_tasks', { status: null, roleId: id });
+  const wasAnalyzing = analyzingRoles.has(id);
 
   container.innerHTML = `
     <div>
       <a href="#/roles" class="text-muted text-sm" style="text-decoration:none">&larr; Back to Roles</a>
       <div id="role-header-wrap"></div>
     </div>
+
+    <div id="analysis-status" class="analysis-status ${analyzingRoles.has(id) ? 'analysis-running' : 'hidden'}"></div>
 
     ${role.status === 'active' ? `
       <div class="card mb-16">
@@ -440,6 +464,10 @@ export async function renderRoleDetail(container, id) {
 
   renderRoleHeader(role);
   CONTENT_FIELDS.forEach(f => renderContentTab(role, f));
+
+  if (wasAnalyzing) {
+    setAnalysisBanner('running', 'Analyzing JD — generating analysis + fit score…');
+  }
 
   // Tab switching
   container.querySelectorAll('[data-detail-tab]').forEach(tab => {
