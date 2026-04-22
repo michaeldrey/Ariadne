@@ -419,6 +419,32 @@ td {
   gap: 16px;
 }
 
+/* Top-align table cells so wrapping Match text doesn't push other
+   columns (Company, Role, Salary) into vertical-center limbo. */
+table td { vertical-align: top; }
+table td .text-sm, table td .text-muted { line-height: 1.4; }
+
+/* AI Search results table — constrain the Match column so long reasons
+   don't dominate the layout and squash Company / Location / Salary into
+   wrapping. Match gets a max height + ellipsis with hover-to-expand. */
+.ai-search-table { table-layout: auto; }
+.ai-search-table col.col-company  { width: 120px; }
+.ai-search-table col.col-location { width: 150px; }
+.ai-search-table col.col-remote   { width: 80px; }
+.ai-search-table col.col-salary   { width: 160px; }
+.ai-search-table col.col-posted   { width: 90px; }
+.ai-search-table col.col-match    { width: 260px; }
+.ai-search-table col.col-action   { width: 90px; }
+
+.ai-match-cell {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+  cursor: help;
+}
+
 /* ── Settings two-pane layout ──
    Linear-style: left nav with section labels, right content area. */
 .settings-layout {

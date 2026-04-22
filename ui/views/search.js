@@ -151,7 +151,17 @@ function renderAiResults(container) {
         <h3>AI Search Results (${aiMatches.length})</h3>
       </div>
       <div class="table-container">
-        <table>
+        <table class="ai-search-table">
+          <colgroup>
+            <col class="col-company" />
+            <col />
+            <col class="col-location" />
+            <col class="col-remote" />
+            <col class="col-salary" />
+            <col class="col-posted" />
+            <col class="col-match" />
+            <col class="col-action" />
+          </colgroup>
           <thead>
             <tr>
               <th>Company</th>
@@ -199,7 +209,9 @@ function renderAiRow(m, i) {
       <td class="text-sm">${remoteBadge}</td>
       <td class="text-sm">${escapeHtml(m.salary || '—')}</td>
       <td class="text-sm text-muted">${escapeHtml(m.posted_date || '—')}</td>
-      <td class="text-sm text-muted" style="max-width:240px">${escapeHtml(m.reason || '')}</td>
+      <td class="text-sm text-muted">
+        <div class="ai-match-cell" title="${escapeHtml(m.reason || '')}">${escapeHtml(m.reason || '')}</div>
+      </td>
       <td>${buttonHtml}</td>
     </tr>
   `;

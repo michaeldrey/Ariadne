@@ -142,6 +142,18 @@ export async function renderRoles(container) {
   renderClosedTab(closed);
   renderSkippedTab(skipped);
 
+  // If a batch analysis was in flight when the user navigated away, re-show
+  // the 'still running' banner on return. The actual per-step progress text
+  // picks up again on the next step inside batchAnalyze; this line just
+  // avoids a blank banner during navigation.
+  if (batchAnalyzing) {
+    const el = document.getElementById('analyze-all-status');
+    if (el) {
+      el.className = 'analysis-status analysis-running';
+      el.innerHTML = '<div class="spinner"></div><span>Re-analyze in progress — you can keep using the app.</span>';
+    }
+  }
+
   container.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
       activeTab = tab.dataset.tab;
@@ -228,6 +240,22 @@ async function batchAnalyze(roles, container) {
   if (failed > 0) parts.push(`${failed} analysis failed`);
   const summary = parts.join(' · ');
   setBanner(failed === 0 && jdFetchFailed === 0 ? 'success' : 'error', summary);
+
+  // Native desktop notification so the user knows it's done even if they've
+  // navigated away or switched apps. Silent failure if not permitted.
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } = window.__TAURI__.notification;
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === 'granted';
+    if (granted) {
+      sendNotification({
+        title: 'Ariadne: Re-analyze complete',
+        body: summary,
+      });
+    }
+  } catch {
+    /* notifications are a nice-to-have; never fail the batch because of them */
+  }
 }
 
 function renderActiveTab(active) {
