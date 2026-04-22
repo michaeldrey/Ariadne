@@ -107,7 +107,12 @@ export async function renderRoles(container) {
   const closed = allRoles.filter(r => r.status === 'closed');
   const skipped = allRoles.filter(r => r.status === 'skipped');
 
-  const withJd = allRoles.filter(r => r.status === 'active' && (r.jd_content || '').trim());
+  // Re-analyze All is any active role that we can run analysis on — either
+  // we already have a JD, OR we have a URL we can fetch one from.
+  const analyzable = allRoles.filter(r =>
+    r.status === 'active'
+    && (((r.jd_content || '').trim()) || ((r.url || '').trim()))
+  );
   _claudeAgentSync = await isClaudeAgent();
   const claudeOnly = _claudeAgentSync;
 
@@ -115,7 +120,7 @@ export async function renderRoles(container) {
     <div class="flex-between mb-16">
       <h2>Roles (${allRoles.length})</h2>
       <div class="btn-group">
-        ${claudeOnly ? `<button class="btn" id="btn-analyze-all" ${withJd.length === 0 ? 'disabled title="No active roles with JDs"' : ''}>Re-analyze All (${withJd.length})</button>` : ''}
+        ${claudeOnly ? `<button class="btn" id="btn-analyze-all" ${analyzable.length === 0 ? 'disabled title="No active roles with a JD or URL"' : ''}>Re-analyze All (${analyzable.length})</button>` : ''}
         <button class="btn btn-primary" id="btn-add-role">+ Add Role</button>
       </div>
     </div>
@@ -148,7 +153,7 @@ export async function renderRoles(container) {
   });
 
   document.getElementById('btn-add-role').addEventListener('click', showAddRoleModal);
-  document.getElementById('btn-analyze-all')?.addEventListener('click', () => batchAnalyze(withJd, container));
+  document.getElementById('btn-analyze-all')?.addEventListener('click', () => batchAnalyze(analyzable, container));
 }
 
 // Running a batch re-analysis on every active role that has a JD. Serial, not
@@ -176,8 +181,31 @@ async function batchAnalyze(roles, container) {
     el.innerHTML = `${icon}<span>${escapeHtml(msg)}</span>`;
   };
 
+  let fetched = 0;
+  let jdFetchFailed = 0;
+
   for (const r of roles) {
-    setBanner('running', `Analyzing ${done + 1} of ${total}: ${r.company} — ${r.title}${failed ? ` (${failed} failed)` : ''}`);
+    const failSuffix = failed ? ` · ${failed} analysis failed` : '';
+    const url = (r.url || '').trim();
+
+    // Step 1: if we have a posting URL, refresh the JD from it. Fetch
+    // failures are non-fatal — we'll still analyze whatever JD is in the DB
+    // (may be empty, in which case tailor_resume errors and counts as
+    // an analysis failure below).
+    if (url) {
+      setBanner('running', `Fetching JD ${done + 1} of ${total}: ${r.company} — ${r.title}${failSuffix}`);
+      try {
+        const jd = await invoke('fetch_jd_from_url', { url });
+        await invoke('update_role', { id: r.id, data: { jd_content: jd } });
+        fetched += 1;
+      } catch (err) {
+        jdFetchFailed += 1;
+        console.warn(`[analyze-all] JD fetch failed for ${r.company}: ${err}`);
+      }
+    }
+
+    // Step 2: analyze against the on-file resume.
+    setBanner('running', `Analyzing ${done + 1} of ${total}: ${r.company} — ${r.title}${failSuffix}`);
     try {
       await invoke('tailor_resume', { roleId: r.id });
     } catch (err) {
@@ -193,10 +221,13 @@ async function batchAnalyze(roles, container) {
   // the summary banner (rendering wipes the old banner element).
   await renderRoles(container);
 
-  const summary = failed === 0
-    ? `Analyzed ${done} role${done === 1 ? '' : 's'}`
-    : `Analyzed ${done - failed} of ${total}; ${failed} failed (see console)`;
-  setBanner(failed === 0 ? 'success' : 'error', summary);
+  const analyzedOk = done - failed;
+  const parts = [`Analyzed ${analyzedOk} of ${total}`];
+  if (fetched > 0) parts.push(`refreshed ${fetched} JD${fetched === 1 ? '' : 's'}`);
+  if (jdFetchFailed > 0) parts.push(`${jdFetchFailed} JD fetch${jdFetchFailed === 1 ? '' : 'es'} failed`);
+  if (failed > 0) parts.push(`${failed} analysis failed`);
+  const summary = parts.join(' · ');
+  setBanner(failed === 0 && jdFetchFailed === 0 ? 'success' : 'error', summary);
 }
 
 function renderActiveTab(active) {
