@@ -69,6 +69,11 @@ struct ConversationSession {
     /// Cancel the MCP server bound for this conversation on drop. Kept alive
     /// for the life of the runtime — the app exiting is what stops them.
     _mcp_cancel: CancellationToken,
+    /// ACP has no client-side system-prompt hook — the agent uses its own.
+    /// We work around this by prepending the user's profile/role corpus to
+    /// the FIRST user message of each session. Subsequent turns inherit it
+    /// via the agent's own chat history. Reset when a new session is made.
+    primed: bool,
 }
 
 impl AcpRuntime {
@@ -250,6 +255,7 @@ impl AcpRuntime {
             ConversationSession {
                 session_id: session_id.clone(),
                 _mcp_cancel: cancel,
+                primed: false,
             },
         );
 
@@ -289,9 +295,34 @@ impl AcpRuntime {
         }
 
         let session_id = self
-            .ensure_session(app.clone(), db.clone(), conversation_id, scope)
+            .ensure_session(app.clone(), db.clone(), conversation_id, scope.clone())
             .await?;
         let connection = self.ensure_connected(app.clone(), db.clone()).await?;
+
+        // On the first turn of a fresh ACP session, prepend the user's
+        // profile / role context as a preamble. ACP provides no client
+        // system-prompt hook, so this is how the agent learns about the
+        // user's resume, stories, search criteria, etc.
+        let is_first_turn = {
+            let mut sessions = self.sessions.lock().await;
+            if let Some(s) = sessions.get_mut(&conversation_id) {
+                let first = !s.primed;
+                s.primed = true;
+                first
+            } else {
+                false
+            }
+        };
+        let effective_user_text = if is_first_turn {
+            let preamble = build_context_preamble(&db, &scope).unwrap_or_default();
+            if preamble.is_empty() {
+                user_text.clone()
+            } else {
+                format!("{}\n\n---\n\n{}", preamble, user_text)
+            }
+        } else {
+            user_text.clone()
+        };
 
         // Fresh accumulator for this turn so notification handlers collect
         // only this turn's text (not leftover from a prior one).
@@ -307,7 +338,7 @@ impl AcpRuntime {
 
         let prompt = PromptRequest::new(
             session_id,
-            vec![ContentBlock::Text(TextContent::new(user_text))],
+            vec![ContentBlock::Text(TextContent::new(effective_user_text))],
         );
 
         let result = connection.send_request(prompt).block_task().await;
@@ -562,6 +593,75 @@ fn first_text_from_tool_content(
 
 fn session_id_to_string(id: &SessionId) -> String {
     id.0.to_string()
+}
+
+/// Build a preamble injected into the first user message of a new ACP
+/// session so the agent learns about the user's profile/role context.
+/// Returns empty string on any DB error — the chat still works, just
+/// without context, which is preferable to hard-failing the send.
+fn build_context_preamble(db: &Database, scope: &Scope) -> Option<String> {
+    let conn = db.0.lock().ok()?;
+
+    let (resume, stories, name, about, criteria): (
+        Option<String>, Option<String>, Option<String>, Option<String>, Option<String>,
+    ) = conn.query_row(
+        "SELECT resume_content, work_stories, profile_name, profile_json, search_criteria
+         FROM settings WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    ).ok()?;
+
+    let mut parts = Vec::new();
+    parts.push("This message is Ariadne context from the user's local app. Use it to ground your responses. The user has NOT typed this part — the app attaches it on the first turn of each session. Subsequent turns don't repeat it; rely on chat history.".to_string());
+
+    if let Some(n) = name.filter(|s| !s.trim().is_empty()) {
+        parts.push(format!("## About the user\nName: {}", n.trim()));
+    }
+    if let Some(a) = about.filter(|s| !s.trim().is_empty()) {
+        parts.push(format!("## Profile\n{}", a.trim()));
+    }
+    if let Some(r) = resume.filter(|s| !s.trim().is_empty()) {
+        parts.push(format!("## Master Resume\n{}", r.trim()));
+    }
+    if let Some(s) = stories.filter(|s| !s.trim().is_empty()) {
+        parts.push(format!("## Work Stories (STAR)\n{}", s.trim()));
+    }
+    if let Some(c) = criteria.filter(|s| !s.trim().is_empty()) {
+        parts.push(format!("## Search Criteria\n{}", c.trim()));
+    }
+
+    if let Scope::Role(role_id) = scope {
+        let row: rusqlite::Result<(String, String, String, Option<String>, Option<String>, Option<String>, Option<i32>)> = conn.query_row(
+            "SELECT company, title, stage, jd_content, notes, next_action, fit_score
+             FROM roles WHERE id = ?1",
+            params![role_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+        );
+        if let Ok((company, title, stage, jd, notes, next_action, fit)) = row {
+            let mut role_section = format!(
+                "## This Role\nCompany: {}\nTitle: {}\nStage: {}",
+                company, title, stage,
+            );
+            if let Some(f) = fit {
+                role_section.push_str(&format!("\nFit Score: {}", f));
+            }
+            if let Some(n) = next_action.filter(|s| !s.trim().is_empty()) {
+                role_section.push_str(&format!("\nNext Action: {}", n.trim()));
+            }
+            if let Some(n) = notes.filter(|s| !s.trim().is_empty()) {
+                role_section.push_str(&format!("\n\n### Notes\n{}", n.trim()));
+            }
+            if let Some(j) = jd.filter(|s| !s.trim().is_empty()) {
+                role_section.push_str(&format!("\n\n### Job Description\n{}", j.trim()));
+            }
+            parts.push(role_section);
+        }
+    }
+
+    if parts.len() <= 1 {
+        return None; // Only the header — nothing useful to say.
+    }
+    Some(parts.join("\n\n"))
 }
 
 /// Resolve the Anthropic API key. Process env wins if set; otherwise we fall
