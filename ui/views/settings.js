@@ -64,75 +64,63 @@ function renderGeneral(el) {
 function renderAiBackends(el, settings, container) {
   const hasKey = (settings.anthropic_api_key || '').trim().length > 0;
   const backend = settings.agent_backend || 'direct';
+  const acpAgent = settings.acp_agent || 'claude';
 
   el.innerHTML = `
     <div class="card mb-16">
-      <h3>Authentication</h3>
-      <p class="text-muted text-sm mb-16">Two ways to pay the LLM. You only need one.</p>
+      <h3>AI</h3>
+      <p class="text-muted text-sm mb-16">Ariadne uses Claude to power chat and AI features. You need <strong>one</strong> of the following:</p>
 
-      <div id="auth-status" class="mb-16 text-sm">
-        <div class="text-muted">Checking…</div>
+      <div id="auth-status" class="mb-16">
+        <div class="text-muted text-sm">Checking…</div>
       </div>
 
-      <div class="auth-options">
-        <div class="auth-option">
-          <h4>Claude Pro/Max subscription</h4>
-          <p class="text-muted text-sm mb-8">Flat monthly fee, no per-token billing. Requires the Claude Code CLI and a subscription. Only works with the ACP backend.</p>
-          <ol class="text-sm text-muted" style="margin:0 0 12px 18px;padding:0">
-            <li>Install the Claude Code CLI (<a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" style="color:var(--accent)">docs</a>).</li>
-            <li>Run <code>claude /login</code> in a terminal.</li>
-            <li>Leave the API Key below empty.</li>
-          </ol>
+      <div class="form-group">
+        <label>Anthropic API Key <span class="text-muted text-sm" style="font-weight:normal">(optional if using Claude Pro/Max)</span></label>
+        <div class="flex gap-8">
+          <input type="password" id="anthropic-key" value="${escapeHtml(settings.anthropic_api_key) || ''}" placeholder="sk-ant-..." style="flex:1" />
+          <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
+          ${hasKey ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
         </div>
-        <div class="auth-option">
-          <h4>Anthropic API key</h4>
-          <p class="text-muted text-sm mb-8">Pay-per-token. Works with both Direct and ACP backends. Get one at <code>console.anthropic.com</code>.</p>
+        <p class="text-muted text-sm mt-8">Get one at <code>console.anthropic.com</code>. Pay-per-token. If you have Claude Pro or Max, leave this blank and run <code>claude /login</code> in a terminal instead.</p>
+      </div>
+
+      <details class="settings-advanced" ${acpAgent !== 'claude' || backend !== 'direct' ? 'open' : ''}>
+        <summary>Advanced options</summary>
+        <div class="settings-advanced-body">
           <div class="form-group">
-            <div class="flex gap-8">
-              <input type="password" id="anthropic-key" value="${escapeHtml(settings.anthropic_api_key) || ''}" placeholder="sk-ant-..." style="flex:1" />
-              <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
-              ${hasKey ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
-            </div>
+            <label>Engine</label>
+            <select id="agent-backend">
+              <option value="acp" ${backend === 'acp' ? 'selected' : ''}>ACP (recommended)</option>
+              <option value="direct" ${backend === 'direct' ? 'selected' : ''}>Direct (Anthropic API, deprecated)</option>
+            </select>
+            <p class="text-muted text-sm mt-8">ACP is multi-vendor and supports Pro/Max auth. Direct hits the Anthropic API directly, is API-key-only, and is scheduled for removal.</p>
+          </div>
+
+          <div class="form-group">
+            <label>ACP Agent <span class="text-muted text-sm" style="font-weight:normal">(only used with the ACP engine)</span></label>
+            <select id="acp-agent">
+              <option value="claude" ${acpAgent === 'claude' ? 'selected' : ''}>Claude — full feature set</option>
+              <option value="gemini" ${acpAgent === 'gemini' ? 'selected' : ''}>Gemini — chat only</option>
+              <option value="codex" ${acpAgent === 'codex' ? 'selected' : ''}>Codex / GPT — chat only</option>
+              <option value="custom" ${acpAgent === 'custom' ? 'selected' : ''}>Custom command — chat only</option>
+            </select>
+            <p class="text-muted text-sm mt-8">Non-Claude agents can chat, but Claude-specific one-shots (Tailor Resume, Fetch JD, etc.) are hidden in the UI.</p>
+          </div>
+
+          <div class="form-group" id="acp-custom-row" style="${acpAgent === 'custom' ? '' : 'display:none'}">
+            <label>Custom ACP Command</label>
+            <input type="text" id="acp-custom-command" value="${escapeHtml(settings.acp_custom_command) || ''}" placeholder="e.g. npx -y some-acp-adapter@latest" style="font-family:var(--font-mono);font-size:12px" />
+            <p class="text-muted text-sm mt-8">Any command that speaks ACP on stdio. Leading <code>NAME=value</code> args are parsed as env vars.</p>
+          </div>
+
+          <button class="btn btn-sm btn-primary" id="btn-save-advanced">Save Advanced</button>
+
+          <div id="acp-install-status" class="text-sm mt-16 pt-8" style="border-top:1px solid var(--border)">
+            <div class="text-muted">Checking <code>claude-code-acp</code> install…</div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <div class="card mb-16">
-      <h3>Agent Backend</h3>
-      <p class="text-muted text-sm mb-8">Which engine runs chat + tool calls. ACP uses the Zed-maintained <code>claude-code-acp</code> adapter (multi-vendor pluggable, supports subscription auth). Direct hits the Anthropic API directly (API key only) and is scheduled for removal.</p>
-      <div class="form-group">
-        <label>Backend</label>
-        <select id="agent-backend">
-          <option value="direct" ${backend === 'direct' ? 'selected' : ''}>Direct (Anthropic Messages API)</option>
-          <option value="acp" ${backend === 'acp' ? 'selected' : ''}>ACP (multi-vendor)</option>
-        </select>
-      </div>
-      <button class="btn btn-sm btn-primary" id="btn-save-backend">Save Backend</button>
-
-      <div id="acp-install-status" class="text-sm mt-16 pt-8" style="border-top:1px solid var(--border)">
-        <div class="text-muted">Checking <code>claude-code-acp</code> install…</div>
-      </div>
-    </div>
-
-    <div class="card mb-16">
-      <h3>ACP Agent</h3>
-      <p class="text-muted text-sm mb-8">When ACP is selected above, which vendor's agent do we spawn? Only Claude unlocks the full Ariadne feature set — the others can chat but can't run one-shot analysis (Tailor Resume, Fetch JD, etc.), which are Claude-specific today.</p>
-      <div class="form-group">
-        <label>Agent</label>
-        <select id="acp-agent">
-          <option value="claude" ${(settings.acp_agent || 'claude') === 'claude' ? 'selected' : ''}>Claude (@zed-industries/claude-code-acp)</option>
-          <option value="gemini" ${settings.acp_agent === 'gemini' ? 'selected' : ''}>Gemini (@google/gemini-cli --experimental-acp)</option>
-          <option value="codex" ${settings.acp_agent === 'codex' ? 'selected' : ''}>Codex/GPT (@zed-industries/codex-acp)</option>
-          <option value="custom" ${settings.acp_agent === 'custom' ? 'selected' : ''}>Custom command</option>
-        </select>
-      </div>
-      <div class="form-group" id="acp-custom-row" style="${settings.acp_agent === 'custom' ? '' : 'display:none'}">
-        <label>Custom Command</label>
-        <input type="text" id="acp-custom-command" value="${escapeHtml(settings.acp_custom_command) || ''}" placeholder="e.g. npx -y some-other-acp-adapter@latest" style="font-family:var(--font-mono);font-size:12px" />
-        <p class="text-muted text-sm mt-8">Any command that speaks ACP on stdio. Leading <code>NAME=value</code> args are parsed as env vars.</p>
-      </div>
-      <button class="btn btn-sm btn-primary" id="btn-save-acp-agent">Save Agent</button>
+      </details>
     </div>
   `;
 
@@ -151,27 +139,22 @@ function renderAiBackends(el, settings, container) {
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  document.getElementById('btn-save-backend').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', { data: { agent_backend: document.getElementById('agent-backend').value } });
-      toast('Agent backend saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
-  });
-
   // ACP agent dropdown toggles the Custom Command row.
   document.getElementById('acp-agent').addEventListener('change', (e) => {
     document.getElementById('acp-custom-row').style.display = e.target.value === 'custom' ? '' : 'none';
   });
-  document.getElementById('btn-save-acp-agent').addEventListener('click', async () => {
+
+  document.getElementById('btn-save-advanced').addEventListener('click', async () => {
     try {
       await invoke('update_settings', {
         data: {
+          agent_backend: document.getElementById('agent-backend').value,
           acp_agent: document.getElementById('acp-agent').value,
           acp_custom_command: document.getElementById('acp-custom-command').value || null,
         }
       });
       invalidateAcpAgentCache();
-      toast('ACP agent saved — restart the app for the change to take effect', 'success');
+      toast('Saved — restart the app for the change to take effect', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
@@ -183,16 +166,9 @@ async function renderAuthStatus(settings) {
   const el = document.getElementById('auth-status');
   if (!el) return;
   const hasKey = (settings.anthropic_api_key || '').trim().length > 0;
-  const backend = settings.agent_backend || 'direct';
 
   if (hasKey) {
-    el.innerHTML = `<div style="color:var(--green)"><strong>✓ Using API key.</strong> Pay-per-token via Anthropic.</div>`;
-    return;
-  }
-
-  // No API key — status depends on backend + Claude CLI presence.
-  if (backend !== 'acp') {
-    el.innerHTML = `<div style="color:var(--yellow)"><strong>No auth configured.</strong> Either set an API key below, or switch the backend to ACP and use Claude Pro/Max.</div>`;
+    el.innerHTML = `<div class="auth-badge auth-ok">✓ Using Anthropic API key</div>`;
     return;
   }
 
@@ -200,18 +176,15 @@ async function renderAuthStatus(settings) {
   try {
     cli = await invoke('detect_claude_cli');
   } catch {
-    el.innerHTML = `<div style="color:var(--yellow)">Couldn't detect Claude CLI. Set an API key below or install the Claude Code CLI.</div>`;
+    cli = { installed: false };
+  }
+  if (cli.installed) {
+    const version = cli.version ? ` (v${escapeHtml(cli.version)})` : '';
+    el.innerHTML = `<div class="auth-badge auth-ok">✓ Using Claude Code CLI${version} — make sure you've run <code>claude /login</code></div>`;
     return;
   }
-  if (!cli.installed) {
-    el.innerHTML = `<div style="color:var(--yellow)"><strong>Claude Code CLI not installed.</strong> Install it (<a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" style="color:var(--accent)">docs</a>) to use Pro/Max auth, or set an API key below.</div>`;
-    return;
-  }
-  const version = cli.version ? ` (v${escapeHtml(cli.version)})` : '';
-  el.innerHTML = `
-    <div style="color:var(--green)"><strong>✓ Claude CLI detected${version}.</strong> If you've run <code>claude /login</code>, chat will use your Pro/Max subscription. No API key needed.</div>
-    <div class="text-muted text-xs mt-8">If you get an auth error when chatting, run <code>claude /login</code> in a terminal to refresh credentials.</div>
-  `;
+
+  el.innerHTML = `<div class="auth-badge auth-warn">⚠ No auth configured — set an API key below, or install the <a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" style="color:var(--accent)">Claude Code CLI</a> and run <code>claude /login</code></div>`;
 }
 
 function renderIntegrations(el, settings) {
