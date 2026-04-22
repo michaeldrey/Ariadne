@@ -1,0 +1,11 @@
+{
+  "name": "ariadne",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.24.0"
+  }
+}
