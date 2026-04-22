@@ -17,4 +17,5 @@
 
 pub mod client;
 pub mod mcp_server;
+pub mod runtime;
 pub mod tools;

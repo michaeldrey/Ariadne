@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod models;
 
+use commands::acp::runtime::AcpRuntime;
 use db::Database;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -15,6 +16,7 @@ pub fn run() {
             let db_path = db::db_path(app.handle());
             let conn = db::init(&db_path).expect("failed to initialize database");
             app.manage(Database(Arc::new(Mutex::new(conn))));
+            app.manage(AcpRuntime::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -70,6 +72,7 @@ pub fn run() {
             // ACP spike (step 3 — temporary; remove once step 4 wires the full flow)
             commands::acp::client::acp_spike_probe,
             commands::acp::mcp_server::acp_mcp_server_spike,
+            commands::acp::runtime::send_to_conversation_acp,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
