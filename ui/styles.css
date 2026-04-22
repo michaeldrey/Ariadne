@@ -378,6 +378,46 @@ td {
 
 .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ── Settings two-pane layout ──
+   Linear-style: left nav with section labels, right content area. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 24px;
+  align-items: flex-start;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 16px;
+}
+.settings-nav-item {
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.settings-nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settings-nav-item.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.settings-content { min-width: 0; }
+
+/* Narrow windows: stack nav above content. */
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; position: static; }
+}
+
 /* ── Forms ── */
 .form-group { margin-bottom: 16px; }
 

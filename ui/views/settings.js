@@ -1,47 +1,78 @@
 import { invoke, escapeHtml, toast } from '../app.js';
 
+// Which section of the Settings page is active. Module-scoped so switching
+// tabs re-renders without losing the active section on data refresh.
+let activeSection = 'ai';
+
+const SECTIONS = [
+  { id: 'general', label: 'General' },
+  { id: 'ai', label: 'AI & Backends' },
+  { id: 'integrations', label: 'Integrations' },
+  { id: 'account', label: 'Account & Sync' },
+];
+
 export async function renderSettings(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading settings...</div>';
-
   const settings = await invoke('get_settings');
 
   container.innerHTML = `
     <h2>Settings</h2>
     <p class="text-muted text-sm mb-16">App configuration. Your personal content lives under <a href="#/profile" style="color:var(--accent)">Profile</a>.</p>
 
+    <div class="settings-layout">
+      <nav class="settings-nav">
+        ${SECTIONS.map(s => `
+          <button class="settings-nav-item ${s.id === activeSection ? 'active' : ''}" data-section="${s.id}">
+            ${s.label}
+          </button>
+        `).join('')}
+      </nav>
+      <div class="settings-content" id="settings-content"></div>
+    </div>
+  `;
+
+  container.querySelectorAll('.settings-nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeSection = btn.dataset.section;
+      renderSettings(container);
+    });
+  });
+
+  renderActiveSection(container, settings);
+}
+
+function renderActiveSection(container, settings) {
+  const el = document.getElementById('settings-content');
+  switch (activeSection) {
+    case 'general':    return renderGeneral(el);
+    case 'ai':         return renderAiBackends(el, settings, container);
+    case 'integrations': return renderIntegrations(el, settings);
+    case 'account':    return renderAccount(el);
+  }
+}
+
+function renderGeneral(el) {
+  el.innerHTML = `
     <div class="card mb-16">
-      <h3>API Keys</h3>
+      <h3>General</h3>
+      <p class="text-muted text-sm mb-8">Ariadne is local-first. Your data lives on this machine — the SQLite database is at <code>~/Library/Application Support/com.ariadne.app/ariadne.db</code> on macOS.</p>
+      <p class="text-muted text-sm">App-level preferences (theme, startup behavior, keyboard shortcuts) will live here when they exist.</p>
+    </div>
+  `;
+}
+
+function renderAiBackends(el, settings, container) {
+  el.innerHTML = `
+    <div class="card mb-16">
+      <h3>Anthropic API Key</h3>
+      <p class="text-muted text-sm mb-8">Required for resume tailoring, research, and chat. Get one at <code>console.anthropic.com</code>.</p>
       <div class="form-group">
-        <label>Anthropic API Key</label>
         <div class="flex gap-8">
-          <input type="password" id="anthropic-key" value="${settings.anthropic_api_key || ''}"
-                 placeholder="sk-ant-..." style="flex:1" />
+          <input type="password" id="anthropic-key" value="${escapeHtml(settings.anthropic_api_key) || ''}" placeholder="sk-ant-..." style="flex:1" />
           <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
           ${settings.anthropic_api_key ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
         </div>
-        <p class="text-muted text-sm mt-8">Required for resume tailoring, research, and chat. Get one at <code>console.anthropic.com</code>.</p>
       </div>
-    </div>
-
-    <div class="card mb-16">
-      <h3>Job Search Backend</h3>
-      <p class="text-muted text-sm mb-8">Ariadne ships open-source without a built-in search backend. Plug your own in here, or skip and add roles manually.</p>
-      <div class="form-group">
-        <label>Search Backend</label>
-        <select id="search-backend">
-          <option value="jobbot" ${settings.search_backend === 'jobbot' ? 'selected' : ''}>JobBot API</option>
-          <option value="none" ${!settings.search_backend || settings.search_backend === 'none' ? 'selected' : ''}>None (manual only)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>JobBot Endpoint</label>
-        <input type="url" id="jobbot-endpoint" value="${settings.jobbot_endpoint || ''}" placeholder="https://..." />
-      </div>
-      <div class="form-group">
-        <label>JobBot API Key</label>
-        <input type="password" id="jobbot-key" value="${settings.jobbot_api_key || ''}" placeholder="API key" />
-      </div>
-      <button class="btn btn-sm btn-primary" id="btn-save-search">Save Search Config</button>
     </div>
 
     <div class="card mb-16">
@@ -60,16 +91,8 @@ export async function renderSettings(container) {
         <div class="text-muted">Checking <code>claude-code-acp</code> install…</div>
       </div>
     </div>
-
-    <div class="card mb-16">
-      <h3>Account & Sync</h3>
-      <p class="text-muted text-sm mb-8">Ariadne is local-first — your data lives on this machine. Cloud sync across devices is planned but not yet available.</p>
-      <button class="btn btn-sm" disabled title="Not yet available">Sign in</button>
-    </div>
-
   `;
 
-  // Save Anthropic key
   document.getElementById('btn-save-anthropic').addEventListener('click', async () => {
     try {
       await invoke('update_settings', { data: { anthropic_api_key: document.getElementById('anthropic-key').value } });
@@ -77,29 +100,54 @@ export async function renderSettings(container) {
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  // Clear Anthropic key
   document.getElementById('btn-clear-anthropic')?.addEventListener('click', async () => {
     try {
       await invoke('clear_api_key');
-      document.getElementById('anthropic-key').value = '';
       toast('API key cleared', 'success');
       renderSettings(container);
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  // Save agent backend
   document.getElementById('btn-save-backend').addEventListener('click', async () => {
     try {
-      await invoke('update_settings', {
-        data: { agent_backend: document.getElementById('agent-backend').value }
-      });
+      await invoke('update_settings', { data: { agent_backend: document.getElementById('agent-backend').value } });
       toast('Agent backend saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
   renderAcpInstallStatus();
+}
 
-  // Save search config
+function renderIntegrations(el, settings) {
+  el.innerHTML = `
+    <div class="card mb-16">
+      <h3>Job Search Backend</h3>
+      <p class="text-muted text-sm mb-8">Ariadne ships open-source without a built-in search backend. Plug your own in here, or skip and add roles manually.</p>
+      <div class="form-group">
+        <label>Search Backend</label>
+        <select id="search-backend">
+          <option value="jobbot" ${settings.search_backend === 'jobbot' ? 'selected' : ''}>JobBot API</option>
+          <option value="none" ${!settings.search_backend || settings.search_backend === 'none' ? 'selected' : ''}>None (manual only)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>JobBot Endpoint</label>
+        <input type="url" id="jobbot-endpoint" value="${escapeHtml(settings.jobbot_endpoint) || ''}" placeholder="https://..." />
+      </div>
+      <div class="form-group">
+        <label>JobBot API Key</label>
+        <input type="password" id="jobbot-key" value="${escapeHtml(settings.jobbot_api_key) || ''}" placeholder="API key" />
+      </div>
+      <button class="btn btn-sm btn-primary" id="btn-save-search">Save Search Config</button>
+    </div>
+
+    <div class="card mb-16">
+      <h3>Gmail</h3>
+      <p class="text-muted text-sm">Planned: one-click inbox scan for job status updates (rejections, interview invites, recruiter outreach). Auto-updates role stages where the match is unambiguous.</p>
+      <button class="btn btn-sm" disabled title="Not yet available">Connect Gmail</button>
+    </div>
+  `;
+
   document.getElementById('btn-save-search').addEventListener('click', async () => {
     try {
       await invoke('update_settings', {
@@ -112,7 +160,16 @@ export async function renderSettings(container) {
       toast('Search config saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
+}
 
+function renderAccount(el) {
+  el.innerHTML = `
+    <div class="card mb-16">
+      <h3>Account & Sync</h3>
+      <p class="text-muted text-sm mb-8">Ariadne is local-first — your data lives on this machine. Cloud sync across devices is planned but not yet available.</p>
+      <button class="btn btn-sm" disabled title="Not yet available">Sign in</button>
+    </div>
+  `;
 }
 
 async function renderAcpInstallStatus() {
@@ -171,4 +228,3 @@ async function renderAcpInstallStatus() {
     }
   });
 }
-
