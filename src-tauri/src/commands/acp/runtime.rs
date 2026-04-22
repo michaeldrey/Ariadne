@@ -58,6 +58,10 @@ pub struct AcpRuntime {
     sessions: Mutex<HashMap<i64, ConversationSession>>,
     session_index: SessionIndex,
     tool_calls: ToolCallIndex,
+    /// Accumulated assistant text for the in-flight turn, keyed by
+    /// conversation_id. Reset at prompt-send and drained at turn-end so the
+    /// final text can be persisted to the messages table.
+    turn_text: Arc<StdMutex<HashMap<i64, String>>>,
 }
 
 struct ConversationSession {
@@ -74,6 +78,7 @@ impl AcpRuntime {
             sessions: Mutex::new(HashMap::new()),
             session_index: Arc::new(StdMutex::new(HashMap::new())),
             tool_calls: Arc::new(StdMutex::new(HashMap::new())),
+            turn_text: Arc::new(StdMutex::new(HashMap::new())),
         })
     }
 
@@ -106,6 +111,7 @@ impl AcpRuntime {
         });
         let index = self.session_index.clone();
         let tool_calls = self.tool_calls.clone();
+        let turn_text = self.turn_text.clone();
         let app_for_handler = app.clone();
 
         let (conn_tx, conn_rx) = oneshot::channel::<ConnectionTo<Agent>>();
@@ -116,7 +122,13 @@ impl AcpRuntime {
                 .name("ariadne")
                 .on_receive_notification(
                     async move |notification: SessionNotification, _cx| {
-                        route_session_update(&app_for_handler, &index, &tool_calls, notification);
+                        route_session_update(
+                            &app_for_handler,
+                            &index,
+                            &tool_calls,
+                            &turn_text,
+                            notification,
+                        );
                         Ok(())
                     },
                     agent_client_protocol::on_receive_notification!(),
@@ -259,6 +271,13 @@ impl AcpRuntime {
             .await?;
         let connection = self.ensure_connected(app.clone(), db.clone()).await?;
 
+        // Fresh accumulator for this turn so notification handlers collect
+        // only this turn's text (not leftover from a prior one).
+        self.turn_text
+            .lock()
+            .unwrap()
+            .insert(conversation_id, String::new());
+
         emit(
             &app,
             json!({"type": "turn_started", "conversation_id": conversation_id}),
@@ -271,8 +290,40 @@ impl AcpRuntime {
 
         let result = connection.send_request(prompt).block_task().await;
 
+        // Drain whatever text the notification handler accumulated this turn.
+        let accumulated = self
+            .turn_text
+            .lock()
+            .unwrap()
+            .remove(&conversation_id)
+            .unwrap_or_default();
+
         match result {
             Ok(_resp) => {
+                if !accumulated.is_empty() {
+                    let content = json!([{"type": "text", "text": accumulated}]);
+                    let saved: rusqlite::Result<i64> = (|| {
+                        let conn = db.0.lock().map_err(|e| {
+                            rusqlite::Error::InvalidPath(e.to_string().into())
+                        })?;
+                        conn.execute(
+                            "INSERT INTO messages (conversation_id, role, content) VALUES (?1, 'assistant', ?2)",
+                            params![conversation_id, content.to_string()],
+                        )?;
+                        Ok(conn.last_insert_rowid())
+                    })();
+                    if let Ok(id) = saved {
+                        emit(
+                            &app,
+                            json!({
+                                "type": "assistant_message_saved",
+                                "conversation_id": conversation_id,
+                                "message_id": id,
+                                "content": content,
+                            }),
+                        );
+                    }
+                }
                 emit(
                     &app,
                     json!({"type": "turn_done", "conversation_id": conversation_id}),
@@ -302,6 +353,7 @@ fn route_session_update(
     app: &AppHandle,
     index: &SessionIndex,
     tool_calls: &ToolCallIndex,
+    turn_text: &Arc<StdMutex<HashMap<i64, String>>>,
     notification: SessionNotification,
 ) {
     let session_key = session_id_to_string(&notification.session_id);
@@ -313,6 +365,12 @@ fn route_session_update(
     match notification.update {
         SessionUpdate::AgentMessageChunk(chunk) => {
             if let ContentBlock::Text(t) = chunk.content {
+                turn_text
+                    .lock()
+                    .unwrap()
+                    .entry(conversation_id)
+                    .or_default()
+                    .push_str(&t.text);
                 emit(
                     app,
                     json!({
