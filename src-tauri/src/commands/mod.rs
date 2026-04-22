@@ -4,6 +4,5 @@ pub mod contacts;
 pub mod settings;
 pub mod claude;
 pub mod search;
-pub mod import;
 pub mod agent;
 pub mod acp;

@@ -56,11 +56,6 @@ pub fn run() {
             // Job Search
             commands::search::run_job_search,
             commands::search::quick_add_from_search,
-            // Import
-            commands::import::import_tracker,
-            commands::import::import_contacts,
-            commands::import::import_tasks,
-            commands::import::import_role_artifacts,
             // Agent chat
             commands::agent::get_or_create_conversation,
             commands::agent::get_or_create_profile_conversation,

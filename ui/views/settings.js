@@ -1,4 +1,4 @@
-import { invoke, escapeHtml, toast, showModal, closeModal } from '../app.js';
+import { invoke, escapeHtml, toast } from '../app.js';
 
 export async function renderSettings(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading settings...</div>';
@@ -67,17 +67,6 @@ export async function renderSettings(container) {
       <button class="btn btn-sm" disabled title="Not yet available">Sign in</button>
     </div>
 
-    <div class="card mb-16">
-      <h3>Import Data</h3>
-      <p class="text-muted text-sm mb-8">Import data from your existing Ariadne JSON files (tracker.json, network.json, tasks.json).</p>
-      <div class="btn-group">
-        <button class="btn btn-sm" id="btn-import-tracker">Import tracker.json</button>
-        <button class="btn btn-sm" id="btn-import-contacts">Import network.json</button>
-        <button class="btn btn-sm" id="btn-import-tasks">Import tasks.json</button>
-      </div>
-      <p class="text-muted text-sm mb-8 mt-16">Import from Ariadne2 — per-role JDs / resume drafts / analyses / notes from role folders, plus top-level resume, work stories, profile, and search criteria. Safe to re-run.</p>
-      <button class="btn btn-sm" id="btn-import-role-folders">Import from Ariadne2</button>
-    </div>
   `;
 
   // Save Anthropic key
@@ -124,67 +113,6 @@ export async function renderSettings(container) {
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  // Import handlers
-  document.getElementById('btn-import-tracker').addEventListener('click', () => showImportModal('tracker'));
-  document.getElementById('btn-import-contacts').addEventListener('click', () => showImportModal('contacts'));
-  document.getElementById('btn-import-tasks').addEventListener('click', () => showImportModal('tasks'));
-  document.getElementById('btn-import-role-folders').addEventListener('click', showRoleFoldersImportModal);
-}
-
-function showRoleFoldersImportModal() {
-  showModal(`
-    <h3>Import from Ariadne2</h3>
-    <p class="text-sm text-muted mb-16">
-      Pulls everything from an Ariadne2 data directory:
-      <br>• Per-role JDs / resume drafts / analyses / research / notes from
-      <code>Applied</code>, <code>Closed</code>, <code>InProgress</code>,
-      <code>Rejected</code> folders (matched by <code>"Company - Title"</code>).
-      <br>• Top-level <code>resume-content.md</code>, <code>work-stories.md</code>,
-      <code>profile.md</code>, <code>search-criteria.md</code> into Profile fields
-      (only if currently empty).
-      <br>Safe to re-run — nothing is overwritten or duplicated.
-    </p>
-    <div class="form-group">
-      <label>Base directory</label>
-      <input type="text" id="import-base-dir" value="~/Development/Ariadne2/Ariadne/data" style="font-family:var(--font-mono);font-size:12px" />
-    </div>
-    <div class="btn-group mt-16">
-      <button class="btn btn-primary" id="btn-do-role-import">Import</button>
-      <button class="btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
-    </div>
-    <div id="role-import-result" class="text-sm mt-16"></div>
-  `);
-
-  document.getElementById('btn-do-role-import').addEventListener('click', async () => {
-    const baseDir = document.getElementById('import-base-dir').value.trim();
-    if (!baseDir) { toast('Base directory required', 'error'); return; }
-
-    const resultEl = document.getElementById('role-import-result');
-    resultEl.innerHTML = '<div class="loading"><div class="spinner"></div> Importing…</div>';
-
-    try {
-      const r = await invoke('import_role_artifacts', { baseDir });
-      const unmatchedList = r.unmatched.length > 0
-        ? `<details class="mt-8"><summary class="text-muted">${r.unmatched.length} unmatched folders (click to expand)</summary><pre style="font-size:11px;color:var(--text-muted);white-space:pre-wrap;margin-top:8px">${r.unmatched.map(u => escapeHtml(u)).join('\n')}</pre></details>`
-        : '';
-      const profileList = (r.profile_files_imported || []).length > 0
-        ? `<p><strong>${r.profile_files_imported.length}</strong> profile files imported: ${r.profile_files_imported.map(f => `<code>${escapeHtml(f)}</code>`).join(', ')}.</p>`
-        : `<p class="text-muted">No new profile files imported (either missing from the base dir, or the target fields are already filled).</p>`;
-      resultEl.innerHTML = `
-        <div class="card">
-          <p><strong>${r.matched}</strong> role folders matched.</p>
-          <p><strong>${r.artifacts_created}</strong> artifacts (resume/analysis/research) imported.</p>
-          <p><strong>${r.jd_updates}</strong> JDs set, <strong>${r.notes_updates}</strong> notes set (only on previously-empty fields).</p>
-          ${profileList}
-          ${unmatchedList}
-        </div>
-      `;
-      toast(`Imported ${r.artifacts_created} artifacts + ${(r.profile_files_imported || []).length} profile files`, 'success');
-    } catch (err) {
-      resultEl.innerHTML = `<p style="color:var(--red)">${escapeHtml(err.toString())}</p>`;
-      toast(err.toString(), 'error');
-    }
-  });
 }
 
 async function renderAcpInstallStatus() {
@@ -244,32 +172,3 @@ async function renderAcpInstallStatus() {
   });
 }
 
-function showImportModal(type) {
-  const labels = { tracker: 'tracker.json', contacts: 'network.json', tasks: 'tasks.json' };
-  const commands = { tracker: 'import_tracker', contacts: 'import_contacts', tasks: 'import_tasks' };
-
-  showModal(`
-    <h3>Import ${labels[type]}</h3>
-    <p class="text-sm text-muted mb-16">Paste the contents of your ${labels[type]} file below.</p>
-    <div class="form-group">
-      <textarea id="import-data" style="min-height:300px" placeholder='{"active": [...], ...}'></textarea>
-    </div>
-    <div class="btn-group mt-16">
-      <button class="btn btn-primary" id="btn-do-import">Import</button>
-      <button class="btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
-    </div>
-  `);
-
-  document.getElementById('btn-do-import').addEventListener('click', async () => {
-    const data = document.getElementById('import-data').value;
-    if (!data.trim()) { toast('No data to import', 'error'); return; }
-
-    try {
-      const result = await invoke(commands[type], { jsonStr: data });
-      closeModal();
-      toast(`Imported ${result.imported} items (${result.skipped} skipped)`, 'success');
-    } catch (err) {
-      toast(err.toString(), 'error');
-    }
-  });
-}
