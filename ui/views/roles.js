@@ -366,14 +366,6 @@ export async function renderRoleDetail(container, id) {
       </div>
     ` : ''}
 
-    <div class="card mb-16">
-      <h4>Next Action</h4>
-      <div class="flex gap-8">
-        <input type="text" id="next-action-input" value="${escapeHtml(role.next_action) || ''}" placeholder="What's the next step?" style="flex:1" />
-        <button class="btn btn-sm" id="btn-save-next">Save</button>
-      </div>
-    </div>
-
     <div class="tabs" id="detail-tabs">
       ${CONTENT_FIELDS.map(f => `
         <button class="tab ${activeContentTab === f.key ? 'active' : ''}" data-detail-tab="${f.key}">${f.label}</button>
@@ -456,14 +448,6 @@ export async function renderRoleDetail(container, id) {
         renderRoleDetail(container, id);
       } catch (err) { toast(err.toString(), 'error'); }
     });
-  });
-
-  // Save next action
-  document.getElementById('btn-save-next').addEventListener('click', async () => {
-    try {
-      await invoke('update_role', { id, data: { next_action: document.getElementById('next-action-input').value } });
-      toast('Next action saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
   });
 
   // Save notes

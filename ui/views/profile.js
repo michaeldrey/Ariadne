@@ -11,6 +11,12 @@ async function subscribeDataChanged(handler) {
   dataChangedUnlisten = await listen('data:changed', (e) => handler(e.payload));
 }
 
+// Edit-mode flags for markdown cards. View by default (rendered markdown,
+// doesn't trap scroll); click Edit to reveal the textarea + save button.
+let editingAbout = false;
+let editingResume = false;
+let editingSearchCriteria = false;
+
 // Parse markdown work stories. Supports two formats:
 //   (a) `## Title` + `**Situation:** / **Task:** / **Action:** / **Result:**` inline labels
 //   (b) `## Title` + `### Situation / ### Action / ### Result / ### Context / ...` h3 sections
@@ -113,18 +119,25 @@ export async function renderProfile(container) {
         <label>Resume PDF Filename</label>
         <input type="text" id="resume-filename" value="${escapeHtml(settings.resume_filename) || 'Resume.pdf'}" placeholder="Resume.pdf" />
       </div>
-      <div class="form-group">
-        <label>About (markdown)</label>
-        <textarea id="profile-md" placeholder="Background, target roles, compensation goals…" style="min-height:140px">${escapeHtml(settings.profile_json) || ''}</textarea>
-      </div>
-      <button class="btn btn-sm btn-primary" id="btn-save-profile">Save</button>
+      <button class="btn btn-sm btn-primary" id="btn-save-profile">Save Identity</button>
     </div>
 
     <div class="card mb-16">
-      <h3>Master Resume</h3>
-      <p class="text-muted text-sm mb-8">In markdown. Used as the source for tailored resumes and STAR story generation.</p>
-      <textarea id="resume-content" style="min-height:220px">${escapeHtml(settings.resume_content) || ''}</textarea>
-      <button class="btn btn-sm btn-primary mt-16" id="btn-save-resume">Save</button>
+      <div class="card-header">
+        <h3>About</h3>
+        <button class="btn btn-sm ${editingAbout ? 'btn-primary' : ''}" id="btn-toggle-about-edit">${editingAbout ? 'Save & View' : 'Edit Markdown'}</button>
+      </div>
+      <p class="text-muted text-sm mb-16">Background, target roles, compensation goals. Claude reads this when helping with outreach and search.</p>
+      <div id="about-body"></div>
+    </div>
+
+    <div class="card mb-16">
+      <div class="card-header">
+        <h3>Master Resume</h3>
+        <button class="btn btn-sm ${editingResume ? 'btn-primary' : ''}" id="btn-toggle-resume-edit">${editingResume ? 'Save & View' : 'Edit Markdown'}</button>
+      </div>
+      <p class="text-muted text-sm mb-16">In markdown. Source for tailored resumes and STAR story generation.</p>
+      <div id="resume-body"></div>
     </div>
 
     <div class="card mb-16">
@@ -143,42 +156,104 @@ export async function renderProfile(container) {
     </div>
 
     <div class="card mb-16">
-      <h3>Search Criteria</h3>
-      <p class="text-muted text-sm mb-8">Target companies, excluded companies, must-haves, dealbreakers. Claude references this when evaluating new roles.</p>
-      <textarea id="search-criteria" placeholder="Target: Series B+ infra companies hiring Staff SEs. Excluded: …" style="min-height:160px">${escapeHtml(settings.search_criteria) || ''}</textarea>
-      <button class="btn btn-sm btn-primary mt-16" id="btn-save-search-criteria">Save</button>
+      <div class="card-header">
+        <h3>Search Criteria</h3>
+        <button class="btn btn-sm ${editingSearchCriteria ? 'btn-primary' : ''}" id="btn-toggle-search-criteria-edit">${editingSearchCriteria ? 'Save & View' : 'Edit Markdown'}</button>
+      </div>
+      <p class="text-muted text-sm mb-16">Target companies, excluded companies, must-haves, dealbreakers. Claude references this when evaluating new roles.</p>
+      <div id="search-criteria-body"></div>
     </div>
   `;
 
-  // Save identity
+  // Save identity (name + filename)
   document.getElementById('btn-save-profile').addEventListener('click', async () => {
     try {
       await invoke('update_settings', {
         data: {
           profile_name: document.getElementById('profile-name').value || null,
           resume_filename: document.getElementById('resume-filename').value || null,
-          profile_json: document.getElementById('profile-md').value || null,
         }
       });
-      toast('Profile saved', 'success');
+      toast('Identity saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  // Save resume
-  document.getElementById('btn-save-resume').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', { data: { resume_content: document.getElementById('resume-content').value } });
-      toast('Resume saved', 'success');
-      renderProfile(container); // re-render so the Generate button enables
-    } catch (err) { toast(err.toString(), 'error'); }
+  renderMarkdownCard({
+    bodyId: 'about-body',
+    textareaId: 'profile-md',
+    value: settings.profile_json || '',
+    editing: editingAbout,
+    emptyText: 'No about content yet. Click "Edit Markdown" to add some.',
+    placeholder: 'Background, target roles, compensation goals…',
+    minHeight: 140,
   });
 
-  // Save search criteria
-  document.getElementById('btn-save-search-criteria').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', { data: { search_criteria: document.getElementById('search-criteria').value || null } });
-      toast('Search criteria saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
+  renderMarkdownCard({
+    bodyId: 'resume-body',
+    textareaId: 'resume-content',
+    value: settings.resume_content || '',
+    editing: editingResume,
+    emptyText: 'No master resume yet. Click "Edit Markdown" to paste one.',
+    placeholder: 'Your master resume in markdown.',
+    minHeight: 220,
+  });
+
+  renderMarkdownCard({
+    bodyId: 'search-criteria-body',
+    textareaId: 'search-criteria',
+    value: settings.search_criteria || '',
+    editing: editingSearchCriteria,
+    emptyText: 'No search criteria yet. Click "Edit Markdown" to add some.',
+    placeholder: 'Target: Series B+ infra companies hiring Staff SEs. Excluded: …',
+    minHeight: 160,
+  });
+
+  document.getElementById('btn-toggle-about-edit').addEventListener('click', async () => {
+    if (editingAbout) {
+      try {
+        await invoke('update_settings', {
+          data: { profile_json: document.getElementById('profile-md').value || null },
+        });
+        toast('About saved', 'success');
+        editingAbout = false;
+        renderProfile(container);
+      } catch (err) { toast(err.toString(), 'error'); }
+    } else {
+      editingAbout = true;
+      renderProfile(container);
+    }
+  });
+
+  document.getElementById('btn-toggle-resume-edit').addEventListener('click', async () => {
+    if (editingResume) {
+      try {
+        await invoke('update_settings', {
+          data: { resume_content: document.getElementById('resume-content').value || null },
+        });
+        toast('Master resume saved', 'success');
+        editingResume = false;
+        renderProfile(container);
+      } catch (err) { toast(err.toString(), 'error'); }
+    } else {
+      editingResume = true;
+      renderProfile(container);
+    }
+  });
+
+  document.getElementById('btn-toggle-search-criteria-edit').addEventListener('click', async () => {
+    if (editingSearchCriteria) {
+      try {
+        await invoke('update_settings', {
+          data: { search_criteria: document.getElementById('search-criteria').value || null },
+        });
+        toast('Search criteria saved', 'success');
+        editingSearchCriteria = false;
+        renderProfile(container);
+      } catch (err) { toast(err.toString(), 'error'); }
+    } else {
+      editingSearchCriteria = true;
+      renderProfile(container);
+    }
   });
 
   // Stories view/edit toggle
@@ -213,6 +288,29 @@ export async function renderProfile(container) {
       : 'Interview me to build STAR stories from my resume. Ask one focused question per turn. When you have enough, draft stories and confirm with me before saving via save_work_stories.';
     openProfileChatAndSend(seed);
   });
+}
+
+// Render a markdown card body: rendered markdown (read-only, scrolls with the
+// page) when not editing, or a textarea when editing. Mirrors the Work
+// Stories view/edit pattern so resume/about/search-criteria don't trap the
+// page's scroll.
+function renderMarkdownCard({ bodyId, textareaId, value, editing, emptyText, placeholder, minHeight }) {
+  const el = document.getElementById(bodyId);
+  if (!el) return;
+
+  if (editing) {
+    el.innerHTML = `
+      <textarea id="${textareaId}" placeholder="${escapeHtml(placeholder)}" style="min-height:${minHeight}px">${escapeHtml(value)}</textarea>
+    `;
+    return;
+  }
+
+  if (!value.trim()) {
+    el.innerHTML = `<div class="empty-state"><p>${escapeHtml(emptyText)}</p></div>`;
+    return;
+  }
+
+  el.innerHTML = `<div class="markdown-content">${renderMarkdown(value)}</div>`;
 }
 
 function renderStoriesBody(md) {

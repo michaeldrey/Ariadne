@@ -330,7 +330,7 @@ td {
 }
 .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-.btn-group { display: flex; gap: 8px; }
+.btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ── Forms ── */
 .form-group { margin-bottom: 16px; }
@@ -485,6 +485,8 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
   margin-bottom: 24px;
 }
 
