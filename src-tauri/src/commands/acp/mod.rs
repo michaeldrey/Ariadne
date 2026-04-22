@@ -15,6 +15,7 @@
 //!   6. Cache-hit logging
 //!   7. Delete direct-API path (2 weeks dogfood soak first)
 
+pub mod install;
 pub mod mcp_server;
 pub mod runtime;
 pub mod tools;

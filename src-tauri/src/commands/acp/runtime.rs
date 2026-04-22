@@ -99,16 +99,38 @@ impl AcpRuntime {
 
         let api_key = resolve_api_key(&db)?;
 
-        let agent = AcpAgent::from_args([
-            format!("ANTHROPIC_API_KEY={}", api_key),
-            "npx".to_string(),
-            "-y".to_string(),
-            "@zed-industries/claude-code-acp@latest".to_string(),
-        ])
-        .map_err(|e| format!("building acp agent: {}", e))?
-        .with_debug(|line, direction| {
-            eprintln!("[acp {:?}] {}", direction, line);
-        });
+        // Prefer a globally-installed binary over `npx -y @latest` — npx
+        // checks the npm registry every launch (adds ~1–30s). If the user
+        // hasn't run the install wizard we fall back to npx so the app
+        // still works out of the box.
+        let args: Vec<String> = match super::install::detect_acp_install().await.ok() {
+            Some(status) if status.installed && status.path.is_some() => {
+                eprintln!(
+                    "[acp] using installed binary {} (v{})",
+                    status.path.as_deref().unwrap_or("?"),
+                    status.version.as_deref().unwrap_or("?")
+                );
+                vec![
+                    format!("ANTHROPIC_API_KEY={}", api_key),
+                    status.path.clone().unwrap(),
+                ]
+            }
+            _ => {
+                eprintln!("[acp] claude-code-acp not installed globally — falling back to npx (slower cold starts)");
+                vec![
+                    format!("ANTHROPIC_API_KEY={}", api_key),
+                    "npx".to_string(),
+                    "-y".to_string(),
+                    "@zed-industries/claude-code-acp@latest".to_string(),
+                ]
+            }
+        };
+
+        let agent = AcpAgent::from_args(args)
+            .map_err(|e| format!("building acp agent: {}", e))?
+            .with_debug(|line, direction| {
+                eprintln!("[acp {:?}] {}", direction, line);
+            });
         let index = self.session_index.clone();
         let tool_calls = self.tool_calls.clone();
         let turn_text = self.turn_text.clone();

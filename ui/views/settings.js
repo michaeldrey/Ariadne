@@ -55,6 +55,10 @@ export async function renderSettings(container) {
         </select>
       </div>
       <button class="btn btn-sm btn-primary" id="btn-save-backend">Save Backend</button>
+
+      <div id="acp-install-status" class="text-sm mt-16 pt-8" style="border-top:1px solid var(--border)">
+        <div class="text-muted">Checking <code>claude-code-acp</code> install…</div>
+      </div>
     </div>
 
     <div class="card mb-16">
@@ -97,6 +101,8 @@ export async function renderSettings(container) {
       toast('Agent backend saved', 'success');
     } catch (err) { toast(err.toString(), 'error'); }
   });
+
+  renderAcpInstallStatus();
 
   // Save search config
   document.getElementById('btn-save-search').addEventListener('click', async () => {
@@ -170,6 +176,63 @@ function showRoleFoldersImportModal() {
       toast(`Imported ${r.artifacts_created} artifacts + ${(r.profile_files_imported || []).length} profile files`, 'success');
     } catch (err) {
       resultEl.innerHTML = `<p style="color:var(--red)">${escapeHtml(err.toString())}</p>`;
+      toast(err.toString(), 'error');
+    }
+  });
+}
+
+async function renderAcpInstallStatus() {
+  const el = document.getElementById('acp-install-status');
+  if (!el) return;
+  let status;
+  try {
+    status = await invoke('detect_acp_install');
+  } catch (err) {
+    el.innerHTML = `<div style="color:var(--red)">Install detection failed: ${escapeHtml(err.toString())}</div>`;
+    return;
+  }
+
+  if (status.installed) {
+    const version = status.version ? ` v${escapeHtml(status.version)}` : '';
+    el.innerHTML = `
+      <div><strong>✓ claude-code-acp installed${version}</strong></div>
+      <div class="text-muted" style="font-family:var(--font-mono);font-size:11px">${escapeHtml(status.path)}</div>
+      <div class="text-muted mt-8">Fast cold starts — no npm registry lookup on launch.</div>
+    `;
+    return;
+  }
+
+  if (!status.npm_available) {
+    el.innerHTML = `
+      <div><strong>claude-code-acp not installed</strong></div>
+      <div class="text-muted mt-8">Also, <code>npm</code> isn't on PATH. Install <a href="https://nodejs.org" target="_blank" style="color:var(--accent)">Node.js</a> first, then come back.</div>
+      <div class="text-muted mt-8">Without the install, the ACP backend falls back to <code>npx -y @latest</code> on every launch (~1–30s slower).</div>
+    `;
+    return;
+  }
+
+  el.innerHTML = `
+    <div><strong>claude-code-acp not installed globally</strong></div>
+    <div class="text-muted mt-8">The ACP backend currently falls back to <code>npx -y @latest</code>, which adds ~1–30s to every cold start. Install once to skip that.</div>
+    <button class="btn btn-sm btn-primary mt-8" id="btn-install-acp">Install claude-code-acp</button>
+    <div id="acp-install-log" class="text-sm text-muted mt-8" style="font-family:var(--font-mono);font-size:11px;white-space:pre-wrap"></div>
+  `;
+
+  document.getElementById('btn-install-acp').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-install-acp');
+    const log = document.getElementById('acp-install-log');
+    btn.disabled = true;
+    btn.textContent = 'Installing…';
+    log.textContent = 'Running: npm install -g @zed-industries/claude-code-acp\n';
+    try {
+      const output = await invoke('install_acp');
+      log.textContent += output;
+      toast('claude-code-acp installed', 'success');
+      renderAcpInstallStatus();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Install claude-code-acp';
+      log.textContent += `\nFailed: ${err.toString()}`;
       toast(err.toString(), 'error');
     }
   });

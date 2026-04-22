@@ -70,6 +70,8 @@ pub fn run() {
             commands::agent::list_artifacts,
             commands::agent::send_to_conversation,
             commands::acp::runtime::send_to_conversation_acp,
+            commands::acp::install::detect_acp_install,
+            commands::acp::install::install_acp,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
