@@ -17,6 +17,31 @@ const CONTENT_FIELDS = [
 let listSort = { key: 'updated_date', dir: 'desc' };
 let activeTab = 'active';
 
+// Background-analysis throttle: prevent firing a second tailor_resume for
+// the same role while one is already in flight.
+const analyzingRoles = new Set();
+
+async function autoAnalyzeRole(roleId) {
+  if (analyzingRoles.has(roleId)) return;
+  analyzingRoles.add(roleId);
+  toast('Analyzing JD…', 'info');
+  try {
+    await invoke('tailor_resume', { roleId });
+    toast('Analysis + fit score updated', 'success');
+    // Re-render the current role detail if we're still on it. The data:changed
+    // subscription doesn't fire for tailor_resume because it mutates columns
+    // directly (not via a tool call), so we re-fetch manually.
+    const container = document.getElementById('view-container');
+    if (container && location.hash === `#/roles/${roleId}`) {
+      renderRoleDetail(container, roleId);
+    }
+  } catch (err) {
+    toast(`Analysis failed: ${err}`, 'error');
+  } finally {
+    analyzingRoles.delete(roleId);
+  }
+}
+
 // Handle to the current `data:changed` subscription so we can drop it when
 // re-rendering or navigating away. One listener at a time.
 let dataChangedUnlisten = null;
@@ -632,6 +657,7 @@ function renderContentTab(role, field) {
 
     el.querySelector(`[data-save="${field.key}"]`).addEventListener('click', async () => {
       const newValue = el.querySelector(`[data-edit="${field.key}"]`).value;
+      const prev = value || '';
       try {
         await invoke('update_role', { id: role.id, data: { [field.field]: newValue } });
         editingTabs.delete(field.key);
@@ -639,6 +665,11 @@ function renderContentTab(role, field) {
         // Re-fetch fresh role so render reflects saved value.
         const fresh = await invoke('get_role', { id: role.id });
         renderContentTab(fresh, field);
+
+        // JD changed → auto-generate analysis + fit score in the background.
+        if (field.key === 'jd' && newValue.trim() && newValue.trim() !== prev.trim()) {
+          autoAnalyzeRole(role.id);
+        }
       } catch (err) { toast(err.toString(), 'error'); }
     });
 

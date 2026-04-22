@@ -3,7 +3,7 @@ use crate::models::*;
 use rusqlite::params;
 use tauri::State;
 
-const CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
+const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 
 #[tauri::command]
