@@ -3,7 +3,7 @@ mod db;
 mod models;
 
 use db::Database;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,7 +14,7 @@ pub fn run() {
         .setup(|app| {
             let db_path = db::db_path(app.handle());
             let conn = db::init(&db_path).expect("failed to initialize database");
-            app.manage(Database(Mutex::new(conn)));
+            app.manage(Database(Arc::new(Mutex::new(conn))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

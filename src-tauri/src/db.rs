@@ -1,9 +1,13 @@
 use rusqlite::{Connection, Result};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use std::path::PathBuf;
 
-pub struct Database(pub Mutex<Connection>);
+/// Database handle. The inner `Arc<Mutex<Connection>>` makes this cheap to clone
+/// so async tool handlers (ACP tools running over spawn_blocking) can own a
+/// handle without going through Tauri's `State`.
+#[derive(Clone)]
+pub struct Database(pub Arc<Mutex<Connection>>);
 
 pub fn db_path(app: &AppHandle) -> PathBuf {
     let data_dir = app
