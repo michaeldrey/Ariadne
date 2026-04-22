@@ -1,14 +1,146 @@
 use crate::db::Database;
 use crate::models::*;
 use rusqlite::params;
+use std::process::Stdio;
 use std::time::Duration;
 use tauri::State;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const HAIKU_MODEL: &str = "claude-haiku-4-5-20251001";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_HTML_BYTES: usize = 400_000;
+
+/// Which model the one-shot caller wants. Translates to Anthropic model IDs
+/// (for API-key mode) or CLI model aliases (for subscription mode).
+#[derive(Debug, Clone, Copy)]
+pub enum ModelTier {
+    Fast,    // Haiku
+    Standard, // Sonnet
+}
+
+/// Run a one-shot prompt against Claude using the best available auth:
+///   - If the user has an Anthropic API key saved, use it (pay-per-token).
+///   - Otherwise, shell out to the Claude Code CLI (`claude -p`) using the
+///     user's Pro/Max subscription credentials.
+///
+/// Returns just the assistant's text response, trimmed.
+pub async fn claude_oneshot(
+    db: &Database,
+    prompt: String,
+    tier: ModelTier,
+    max_tokens: u32,
+) -> Result<String, String> {
+    // API key wins if present.
+    let api_key = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .map_err(|e| e.to_string())?
+        .filter(|k| !k.trim().is_empty())
+    };
+
+    if let Some(key) = api_key {
+        return call_anthropic_api(&key, prompt, tier, max_tokens).await;
+    }
+
+    // Fall back to Claude Code CLI for subscription auth.
+    call_claude_cli(prompt, tier).await
+}
+
+async fn call_anthropic_api(
+    api_key: &str,
+    prompt: String,
+    tier: ModelTier,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let model = match tier {
+        ModelTier::Fast => HAIKU_MODEL,
+        ModelTier::Standard => CLAUDE_MODEL,
+    };
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Claude API error ({}): {}", status, text));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    json["content"][0]["text"]
+        .as_str()
+        .ok_or_else(|| "Unexpected API response format".to_string())
+        .map(|s| s.trim().to_string())
+}
+
+async fn call_claude_cli(prompt: String, tier: ModelTier) -> Result<String, String> {
+    // Resolve absolute path — Tauri apps have a minimal PATH so `claude`
+    // may not resolve by name even if it's installed.
+    let which = Command::new("which")
+        .arg("claude")
+        .output()
+        .await
+        .map_err(|e| format!("which claude: {}", e))?;
+    if !which.status.success() {
+        return Err(
+            "No API key configured and the Claude Code CLI (`claude`) isn't on PATH. Set an API key in Settings or install the Claude Code CLI."
+                .to_string(),
+        );
+    }
+    let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+
+    let model_alias = match tier {
+        ModelTier::Fast => "haiku",
+        ModelTier::Standard => "sonnet",
+    };
+
+    let mut child = Command::new(&path)
+        .args(["-p", "--model", model_alias])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn claude: {}", e))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| format!("write stdin: {}", e))?;
+        drop(stdin); // signal EOF
+    }
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("wait claude: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Claude CLI failed ({}): {}. Run `claude /login` in a terminal if credentials are missing.",
+            output.status, stderr.trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
 
 /// Generate a 4-7 word chat-thread title from the user's first message.
 /// Haiku-backed — cheap and fast so the picker updates within a second
@@ -19,56 +151,16 @@ pub async fn summarize_for_title(
     db: State<'_, Database>,
     text: String,
 ) -> Result<String, String> {
-    let api_key: String = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        conn.query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| {
-            r.get::<_, Option<String>>(0)
-        })
-        .map_err(|e| e.to_string())?
-        .ok_or("No Anthropic API key configured. Add one in Settings.")?
-    };
-
-    let body = serde_json::json!({
-        "model": HAIKU_MODEL,
-        "max_tokens": 30,
-        "messages": [{
-            "role": "user",
-            "content": format!(
-                "Write a 4-7 word title for a chat thread that starts with this message. \
-                 No quotes, no trailing period, Title Case. Reply with ONLY the title text.\n\n{}",
-                text
-            )
-        }]
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(FETCH_TIMEOUT)
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let resp = client
-        .post(API_URL)
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("title API request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Claude API error ({}): {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let title = json["content"][0]["text"]
-        .as_str()
-        .ok_or("Unexpected API response format")?
-        .trim()
+    let prompt = format!(
+        "Write a 4-7 word title for a chat thread that starts with this message. \
+         No quotes, no trailing period, Title Case. Reply with ONLY the title text.\n\n{}",
+        text
+    );
+    let title = claude_oneshot(&db, prompt, ModelTier::Fast, 30)
+        .await?
         .trim_matches('"')
         .trim_end_matches('.')
+        .trim()
         .to_string();
 
     if title.is_empty() {
@@ -87,15 +179,6 @@ pub async fn fetch_jd_from_url(
     db: State<'_, Database>,
     url: String,
 ) -> Result<String, String> {
-    let api_key: String = {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        conn.query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| {
-            r.get::<_, Option<String>>(0)
-        })
-        .map_err(|e| e.to_string())?
-        .ok_or("No Anthropic API key configured. Add one in Settings.")?
-    };
-
     // Polite-but-realistic UA; some boards 403 clearly-bot requests.
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
@@ -143,41 +226,10 @@ Return ONLY the job description text, in clean markdown:
 "#
     );
 
-    let body = serde_json::json!({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    });
-
-    let resp = client
-        .post(API_URL)
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Claude API request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Claude API error ({}): {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let text = json["content"][0]["text"]
-        .as_str()
-        .ok_or("Unexpected API response format")?
-        .trim()
-        .to_string();
-
+    let text = claude_oneshot(&db, prompt, ModelTier::Standard, 4096).await?;
     if text == "NOT_A_JOB_POSTING" {
-        return Err(
-            "This page doesn't look like a job posting. Check the URL.".to_string(),
-        );
+        return Err("This page doesn't look like a job posting. Check the URL.".to_string());
     }
-
     Ok(text)
 }
 
@@ -231,11 +283,8 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 #[tauri::command]
 pub async fn tailor_resume(db: State<'_, Database>, role_id: String) -> Result<TailorResult, String> {
-    let (api_key, resume_content, work_stories, jd_content, company, title) = {
+    let (resume_content, work_stories, jd_content, company, title) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let key: Option<String> = conn
-            .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
         let resume: Option<String> = conn
             .query_row("SELECT resume_content FROM settings WHERE id = 1", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
@@ -249,10 +298,9 @@ pub async fn tailor_resume(db: State<'_, Database>, role_id: String) -> Result<T
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(|e| e.to_string())?;
-        (key, resume, stories, jd, comp, ttl)
+        (resume, stories, jd, comp, ttl)
     };
 
-    let api_key = api_key.ok_or("No Anthropic API key configured. Add one in Settings.")?;
     let resume = resume_content.ok_or("No resume content. Add your resume in Settings.")?;
     let jd = jd_content.ok_or("No JD content for this role. Add the job description first.")?;
 
@@ -299,34 +347,7 @@ Respond in EXACTLY this format:
 (likely questions based on gaps)"#
     );
 
-    let body = serde_json::json!({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Claude API error ({}): {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let text = json["content"][0]["text"]
-        .as_str()
-        .ok_or("Unexpected API response format")?
-        .to_string();
+    let text = claude_oneshot(&db, prompt, ModelTier::Standard, 4096).await?;
 
     // Parse response
     let (resume_draft, analysis) = if let Some(idx) = text.find("---ANALYSIS---") {
@@ -337,10 +358,8 @@ Respond in EXACTLY this format:
         (text.clone(), String::new())
     };
 
-    // Extract fit score
     let fit_score = extract_overall_score(&analysis);
 
-    // Save to database
     {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -351,20 +370,13 @@ Respond in EXACTLY this format:
         .map_err(|e| e.to_string())?;
     }
 
-    Ok(TailorResult {
-        resume_draft,
-        analysis,
-        fit_score,
-    })
+    Ok(TailorResult { resume_draft, analysis, fit_score })
 }
 
 #[tauri::command]
 pub async fn generate_research(db: State<'_, Database>, role_id: String) -> Result<ResearchResult, String> {
-    let (api_key, jd_content, company, title, notes) = {
+    let (jd_content, company, title, notes) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let key: Option<String> = conn
-            .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
         let (jd, comp, ttl, n): (Option<String>, String, String, Option<String>) = conn
             .query_row(
                 "SELECT jd_content, company, title, notes FROM roles WHERE id = ?1",
@@ -372,10 +384,9 @@ pub async fn generate_research(db: State<'_, Database>, role_id: String) -> Resu
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .map_err(|e| e.to_string())?;
-        (key, jd, comp, ttl, n)
+        (jd, comp, ttl, n)
     };
 
-    let api_key = api_key.ok_or("No Anthropic API key configured. Add one in Settings.")?;
     let jd = jd_content.ok_or("No JD content for this role.")?;
 
     let notes_section = notes
@@ -418,34 +429,7 @@ Please include:
 A condensed 10-line cheat sheet for interview day"#
     );
 
-    let body = serde_json::json!({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Claude API error ({}): {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let research_packet = json["content"][0]["text"]
-        .as_str()
-        .ok_or("Unexpected API response format")?
-        .to_string();
+    let research_packet = claude_oneshot(&db, prompt, ModelTier::Standard, 4096).await?;
 
     // Save to database
     {
@@ -471,21 +455,17 @@ pub struct GenerateStoriesResult {
 pub async fn generate_work_stories(
     db: State<'_, Database>,
 ) -> Result<GenerateStoriesResult, String> {
-    let (api_key, resume_content, profile_name) = {
+    let (resume_content, profile_name) = {
         let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let key: Option<String> = conn
-            .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?;
         let resume: Option<String> = conn
             .query_row("SELECT resume_content FROM settings WHERE id = 1", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
         let name: Option<String> = conn
             .query_row("SELECT profile_name FROM settings WHERE id = 1", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        (key, resume, name)
+        (resume, name)
     };
 
-    let api_key = api_key.ok_or("No Anthropic API key configured. Add one in Settings.")?;
     let resume = resume_content.ok_or("No master resume. Add it on the Profile page first.")?;
 
     let name_bit = profile_name
@@ -518,33 +498,8 @@ Respond with ONLY the stories, in this exact markdown format. No preamble, no co
 "#
     );
 
-    let body = serde_json::json!({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}]
-    });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(API_URL)
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("API request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Claude API error ({}): {}", status, text));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let work_stories = json["content"][0]["text"]
-        .as_str()
-        .ok_or("Unexpected API response format")?
+    let work_stories = claude_oneshot(&db, prompt, ModelTier::Standard, 4096)
+        .await?
         .trim()
         .to_string();
 
