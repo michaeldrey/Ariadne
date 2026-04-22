@@ -81,6 +81,53 @@ struct SaveWorkStoriesParams {
     content: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct UpdateNotesParams {
+    /// Full new notes content. Overwrites the field.
+    notes: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct UpdateNextActionParams {
+    /// Short one-liner about what the user should do next.
+    next_action: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct UpdateFitScoreParams {
+    /// Fit assessment 0-100.
+    fit_score: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct SaveArtifactParams {
+    /// One of: `resume`, `analysis`, `research`, `outreach`.
+    kind: String,
+    /// Artifact content, typically markdown.
+    content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct CreateTaskParams {
+    /// Task description.
+    content: String,
+    /// Optional YYYY-MM-DD due date.
+    #[serde(default)]
+    due_date: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct UpdateSearchCriteriaParams {
+    /// Full markdown for search criteria (companies, levels, must-haves, dealbreakers).
+    content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct UpdateProfileAboutParams {
+    /// Full markdown for the user's profile 'about' section.
+    content: String,
+}
+
 // ── Tool implementations ──
 
 #[tool_router]
@@ -141,19 +188,210 @@ impl AriadneTools {
         ))]))
     }
 
-    // TODO(step 2 follow-up): port the remaining 7 tools from
-    // commands::agent::run_role_tool and run_profile_tool. Each follows the
-    // same spawn_blocking + params pattern as the two above.
-    //
-    // Role tools:
-    //   - update_notes(notes: String)
-    //   - update_next_action(next_action: String)
-    //   - update_fit_score(fit_score: i32)  [validate 0..=100]
-    //   - save_artifact(kind: String, content: String)  [insert into artifacts table with conversation_id]
-    //   - create_task(content: String, due_date: Option<String>)
-    // Profile tools:
-    //   - update_search_criteria(content: String)
-    //   - update_profile_about(content: String)  [writes to settings.profile_json]
+    #[tool(description = "Overwrite the role's notes field. Pass the full new notes content. Role-scoped chats only.")]
+    async fn update_notes(
+        &self,
+        Parameters(p): Parameters<UpdateNotesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let role_id = self.require_role()?.to_string();
+        let db = self.db.clone();
+        let notes = p.notes;
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "UPDATE roles SET notes = ?1, updated_date = date('now') WHERE id = ?2",
+                params![notes, role_id],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text("Notes updated".to_string())]))
+    }
+
+    #[tool(description = "Set the role's next_action — a short one-liner about what the user should do next. Role-scoped chats only.")]
+    async fn update_next_action(
+        &self,
+        Parameters(p): Parameters<UpdateNextActionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let role_id = self.require_role()?.to_string();
+        let db = self.db.clone();
+        let action = p.next_action.clone();
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "UPDATE roles SET next_action = ?1, updated_date = date('now') WHERE id = ?2",
+                params![action, role_id],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Next action: {}",
+            p.next_action
+        ))]))
+    }
+
+    #[tool(description = "Set the role's fit score (0-100). Use this when producing a tailored resume or analysis so the UI's fit badge reflects your assessment. Role-scoped chats only.")]
+    async fn update_fit_score(
+        &self,
+        Parameters(p): Parameters<UpdateFitScoreParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let role_id = self.require_role()?.to_string();
+        if !(0..=100).contains(&p.fit_score) {
+            return Err(McpError::invalid_params(
+                format!("fit_score must be 0-100, got {}", p.fit_score),
+                None,
+            ));
+        }
+        let db = self.db.clone();
+        let score = p.fit_score;
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "UPDATE roles SET fit_score = ?1, updated_date = date('now') WHERE id = ?2",
+                params![score, role_id],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Fit score set to {}",
+            score
+        ))]))
+    }
+
+    #[tool(description = "Save a generated artifact for this role. Creates a new versioned entry; previous versions remain accessible. Kinds: 'resume' for tailored resume drafts, 'analysis' for fit/comparison analysis, 'research' for company/interview research, 'outreach' for drafted messages to contacts. Role-scoped chats only.")]
+    async fn save_artifact(
+        &self,
+        Parameters(p): Parameters<SaveArtifactParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let role_id = self.require_role()?.to_string();
+        match p.kind.as_str() {
+            "resume" | "analysis" | "research" | "outreach" => {}
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("kind must be one of resume|analysis|research|outreach, got '{}'", other),
+                    None,
+                ));
+            }
+        }
+        let db = self.db.clone();
+        let kind = p.kind.clone();
+        let content = p.content;
+        let conversation_id = self.conversation_id;
+
+        let res: rusqlite::Result<i64> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "INSERT INTO artifacts (role_id, kind, content, conversation_id) VALUES (?1, ?2, ?3, ?4)",
+                params![role_id, kind, content, conversation_id],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        let id = res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Saved {} artifact (id={})",
+            p.kind, id
+        ))]))
+    }
+
+    #[tool(description = "Create a new task linked to this role (e.g. 'Follow up with recruiter,' 'Prep system design question'). Role-scoped chats only.")]
+    async fn create_task(
+        &self,
+        Parameters(p): Parameters<CreateTaskParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let role_id = self.require_role()?.to_string();
+        let db = self.db.clone();
+        let content = p.content.clone();
+        let due = p.due_date.clone();
+        let id = nanoid::nanoid!(10);
+        let id_for_sql = id.clone();
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "INSERT INTO tasks (id, content, due_date, role_id) VALUES (?1, ?2, ?3, ?4)",
+                params![id_for_sql, content, due, role_id],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Task created (id={}): {}",
+            id, p.content
+        ))]))
+    }
+
+    #[tool(description = "Overwrite the user's search criteria (companies, levels, must-haves, dealbreakers). Pass complete markdown. Profile-scoped chats only.")]
+    async fn update_search_criteria(
+        &self,
+        Parameters(p): Parameters<UpdateSearchCriteriaParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_profile()?;
+        let db = self.db.clone();
+        let content = p.content;
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "UPDATE settings SET search_criteria = ?1, updated_at = datetime('now') WHERE id = 1",
+                params![content],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            "Search criteria updated".to_string(),
+        )]))
+    }
+
+    #[tool(description = "Overwrite the user's profile 'about' markdown (background, target roles, comp goals). Pass complete markdown. Profile-scoped chats only.")]
+    async fn update_profile_about(
+        &self,
+        Parameters(p): Parameters<UpdateProfileAboutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_profile()?;
+        let db = self.db.clone();
+        let content = p.content;
+
+        let res: rusqlite::Result<usize> = tokio::task::spawn_blocking(move || {
+            let conn = db.0.lock().map_err(|e| rusqlite::Error::InvalidPath(e.to_string().into()))?;
+            conn.execute(
+                "UPDATE settings SET profile_json = ?1, updated_at = datetime('now') WHERE id = 1",
+                params![content],
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("task join: {}", e), None))?;
+
+        res.map_err(|e| McpError::internal_error(format!("sql: {}", e), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            "Profile 'about' updated".to_string(),
+        )]))
+    }
 }
 
 #[tool_handler]
