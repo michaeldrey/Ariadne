@@ -107,6 +107,8 @@ export async function renderSettings(container) {
         <button class="btn btn-sm" id="btn-import-contacts">Import network.json</button>
         <button class="btn btn-sm" id="btn-import-tasks">Import tasks.json</button>
       </div>
+      <p class="text-muted text-sm mb-8 mt-16">Import per-role JDs, resume drafts, analyses, and notes from your Ariadne2 role folders (<code>data/Applied</code>, <code>data/Closed</code>, etc.).</p>
+      <button class="btn btn-sm" id="btn-import-role-folders">Import role folders</button>
     </div>
   `;
 
@@ -186,6 +188,56 @@ export async function renderSettings(container) {
   document.getElementById('btn-import-tracker').addEventListener('click', () => showImportModal('tracker'));
   document.getElementById('btn-import-contacts').addEventListener('click', () => showImportModal('contacts'));
   document.getElementById('btn-import-tasks').addEventListener('click', () => showImportModal('tasks'));
+  document.getElementById('btn-import-role-folders').addEventListener('click', showRoleFoldersImportModal);
+}
+
+function showRoleFoldersImportModal() {
+  showModal(`
+    <h3>Import Role Folders</h3>
+    <p class="text-sm text-muted mb-16">
+      Reads per-role JDs, resume drafts, analyses, research packets, and notes from
+      <code>&lt;base&gt;/Applied</code>, <code>&lt;base&gt;/Closed</code>,
+      <code>&lt;base&gt;/InProgress</code>, <code>&lt;base&gt;/Rejected</code>.
+      Matches folders to existing roles by <code>"Company - Title"</code> folder names.
+      Safe to re-run — duplicate artifacts are skipped.
+    </p>
+    <div class="form-group">
+      <label>Base directory</label>
+      <input type="text" id="import-base-dir" value="~/Development/Ariadne2/Ariadne/data" style="font-family:var(--font-mono);font-size:12px" />
+    </div>
+    <div class="btn-group mt-16">
+      <button class="btn btn-primary" id="btn-do-role-import">Import</button>
+      <button class="btn" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
+    </div>
+    <div id="role-import-result" class="text-sm mt-16"></div>
+  `);
+
+  document.getElementById('btn-do-role-import').addEventListener('click', async () => {
+    const baseDir = document.getElementById('import-base-dir').value.trim();
+    if (!baseDir) { toast('Base directory required', 'error'); return; }
+
+    const resultEl = document.getElementById('role-import-result');
+    resultEl.innerHTML = '<div class="loading"><div class="spinner"></div> Importing…</div>';
+
+    try {
+      const r = await invoke('import_role_artifacts', { baseDir });
+      const unmatchedList = r.unmatched.length > 0
+        ? `<details class="mt-8"><summary class="text-muted">${r.unmatched.length} unmatched folders (click to expand)</summary><pre style="font-size:11px;color:var(--text-muted);white-space:pre-wrap;margin-top:8px">${r.unmatched.map(u => escapeHtml(u)).join('\n')}</pre></details>`
+        : '';
+      resultEl.innerHTML = `
+        <div class="card">
+          <p><strong>${r.matched}</strong> role folders matched.</p>
+          <p><strong>${r.artifacts_created}</strong> artifacts (resume/analysis/research) imported.</p>
+          <p><strong>${r.jd_updates}</strong> JDs set, <strong>${r.notes_updates}</strong> notes set (only on previously-empty fields).</p>
+          ${unmatchedList}
+        </div>
+      `;
+      toast(`Imported ${r.artifacts_created} artifacts from ${r.matched} roles`, 'success');
+    } catch (err) {
+      resultEl.innerHTML = `<p style="color:var(--red)">${escapeHtml(err.toString())}</p>`;
+      toast(err.toString(), 'error');
+    }
+  });
 }
 
 function renderStoriesBody(md) {

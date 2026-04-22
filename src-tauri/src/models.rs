@@ -194,6 +194,37 @@ pub struct ResearchResult {
     pub research_packet: String,
 }
 
+// ── Agent Chat ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Conversation {
+    pub id: i64,
+    pub role_id: String,
+    pub title: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Message {
+    pub id: i64,
+    pub conversation_id: i64,
+    pub role: String,          // "user" | "assistant"
+    pub content: serde_json::Value, // JSON array of content blocks
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: i64,
+    pub role_id: String,
+    pub kind: String,          // "resume" | "analysis" | "research" | "outreach"
+    pub content: String,
+    pub conversation_id: Option<i64>,
+    pub message_id: Option<i64>,
+    pub created_at: String,
+}
+
 // ── Job Search ──
 
 #[derive(Debug, Serialize, Deserialize)]

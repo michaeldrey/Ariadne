@@ -102,5 +102,60 @@ fn migrate(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_interactions_contact ON interactions(contact_id);
         ",
     )?;
+
+    // Versioned migrations. Use PRAGMA user_version so data migrations run once.
+    let current: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    if current < 2 {
+        // v2: agent chat — conversations, messages, versioned artifacts.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role_id TEXT NOT NULL UNIQUE REFERENCES roles(id) ON DELETE CASCADE,
+                title TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL,
+                message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_artifacts_role_kind ON artifacts(role_id, kind, created_at DESC);
+
+            INSERT INTO artifacts (role_id, kind, content, created_at)
+            SELECT id, 'resume', resume_draft, COALESCE(updated_date, date('now'))
+            FROM roles WHERE resume_draft IS NOT NULL AND resume_draft != '';
+
+            INSERT INTO artifacts (role_id, kind, content, created_at)
+            SELECT id, 'analysis', comparison_analysis, COALESCE(updated_date, date('now'))
+            FROM roles WHERE comparison_analysis IS NOT NULL AND comparison_analysis != '';
+
+            INSERT INTO artifacts (role_id, kind, content, created_at)
+            SELECT id, 'research', research_packet, COALESCE(updated_date, date('now'))
+            FROM roles WHERE research_packet IS NOT NULL AND research_packet != '';
+
+            PRAGMA user_version = 2;
+            ",
+        )?;
+    }
+
     Ok(())
 }

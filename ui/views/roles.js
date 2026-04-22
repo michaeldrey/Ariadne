@@ -2,6 +2,7 @@ import {
   invoke, escapeHtml, formatDate, stageBadgeClass, fitScoreClass,
   toast, showModal, closeModal, navigate, renderMarkdown,
 } from '../app.js';
+import { openChat, closeChat } from './chat.js';
 
 const STAGES = ['Sourced', 'Applied', 'Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'];
 const OUTCOMES = ['Rejected', 'Withdrew', 'Accepted', 'Expired'];
@@ -543,6 +544,7 @@ function renderRoleHeader(role) {
         </div>
       </div>
       <div class="btn-group">
+        <button class="btn btn-primary btn-sm" id="btn-open-chat">Chat</button>
         ${role.status === 'active' ? `
           <button class="btn btn-sm" id="btn-tailor" ${!role.jd_content ? 'disabled title="Add a JD first"' : ''}>Tailor Resume</button>
           <button class="btn btn-sm" id="btn-research">Research</button>
@@ -563,6 +565,10 @@ function renderRoleHeader(role) {
   document.getElementById('btn-edit-header').addEventListener('click', () => {
     editingHeader = true;
     renderRoleHeader(role);
+  });
+
+  document.getElementById('btn-open-chat').addEventListener('click', () => {
+    openChat(role);
   });
 
   document.getElementById('btn-tailor')?.addEventListener('click', async () => {

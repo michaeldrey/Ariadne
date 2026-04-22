@@ -39,8 +39,15 @@
 
     <!-- Main content -->
     <main id="content">
+      <div id="nav-bar">
+        <button id="nav-back" class="nav-btn" title="Back (Cmd-[)">←</button>
+        <button id="nav-forward" class="nav-btn" title="Forward (Cmd-])">→</button>
+      </div>
       <div id="view-container"></div>
     </main>
+
+    <!-- Chat drawer (role-scoped; hidden outside of role detail) -->
+    <aside id="chat-drawer" class="chat-closed"></aside>
   </div>
 
   <!-- Toast notifications -->

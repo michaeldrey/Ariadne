@@ -43,6 +43,7 @@ import { renderTasks } from './views/tasks.js';
 import { renderContacts, renderContactDetail } from './views/contacts.js';
 import { renderSearch } from './views/search.js';
 import { renderSettings } from './views/settings.js';
+import { closeChat } from './views/chat.js';
 
 async function renderView() {
   const { view, params } = getRoute();
@@ -55,6 +56,11 @@ async function renderView() {
       (view === 'roleDetail' && link.dataset.view === 'roles') ||
       (view === 'contactDetail' && link.dataset.view === 'contacts'));
   });
+
+  // Chat drawer is role-scoped — close it when leaving role detail.
+  if (view !== 'roleDetail') {
+    closeChat().catch(() => {});
+  }
 
   try {
     switch (view) {
@@ -185,8 +191,27 @@ export function renderMarkdown(src) {
 
 export { invoke };
 
-// ── Init ──
+// ── Nav history (back/forward) ──
+// Delegates to the browser's own hash-based history stack. We don't shadow
+// the stack — the browser already knows how deep we are, and `history.back()`
+// on the first entry is a harmless no-op.
 window.addEventListener('hashchange', renderView);
+
+document.getElementById('nav-back').addEventListener('click', () => window.history.back());
+document.getElementById('nav-forward').addEventListener('click', () => window.history.forward());
+
+// Cmd-[ / Cmd-] keyboard shortcuts (Mac convention).
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key === '[') {
+    e.preventDefault();
+    window.history.back();
+  } else if (e.key === ']') {
+    e.preventDefault();
+    window.history.forward();
+  }
+});
+
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeModal();
 });

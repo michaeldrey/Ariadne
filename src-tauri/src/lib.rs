@@ -55,6 +55,12 @@ pub fn run() {
             commands::import::import_tracker,
             commands::import::import_contacts,
             commands::import::import_tasks,
+            commands::import::import_role_artifacts,
+            // Agent chat
+            commands::agent::get_or_create_conversation,
+            commands::agent::list_messages,
+            commands::agent::list_artifacts,
+            commands::agent::send_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
