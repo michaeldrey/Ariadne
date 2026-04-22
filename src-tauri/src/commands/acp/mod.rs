@@ -16,4 +16,5 @@
 //!   7. Delete direct-API path (2 weeks dogfood soak first)
 
 pub mod client;
+pub mod mcp_server;
 pub mod tools;

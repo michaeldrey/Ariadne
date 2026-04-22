@@ -30,6 +30,9 @@ futures-util = "0.3"
 agent-client-protocol = "0.11"
 agent-client-protocol-tokio = "0.11"
 agent-client-protocol-rmcp = "0.11"
-rmcp = { version = "1.5", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "1.5", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 schemars = "1"
 shell-words = "1"
+axum = "0.8"
+tower = "0.5"
+tokio-util = "0.7"
