@@ -18,6 +18,25 @@ export async function renderSearch(container) {
   const settings = await invoke('get_settings');
   const hasCriteria = (settings.search_criteria || '').trim().length > 0;
   const hasApiKey = (settings.anthropic_api_key || '').trim().length > 0;
+
+  // If no API key, check for Claude CLI — Pro/Max subscription auth also
+  // counts as a valid auth path for the ACP backend.
+  let claudeCliDetected = false;
+  let claudeCliVersion = null;
+  if (!hasApiKey) {
+    try {
+      const cli = await invoke('detect_claude_cli');
+      claudeCliDetected = !!cli.installed;
+      claudeCliVersion = cli.version || null;
+    } catch { /* treat as not detected */ }
+  }
+  const hasAuth = hasApiKey || claudeCliDetected;
+  const authLabel = hasApiKey
+    ? 'Anthropic API key set'
+    : claudeCliDetected
+      ? `Claude Code CLI${claudeCliVersion ? ` v${claudeCliVersion}` : ''} — using Pro/Max subscription`
+      : 'No auth configured';
+
   const jobbotConfigured = settings.search_backend === 'jobbot'
     && (settings.jobbot_endpoint || '').trim().length > 0;
 
@@ -45,13 +64,13 @@ export async function renderSearch(container) {
           <div class="text-muted">Uses:</div>
           <ul style="margin:4px 0 0 18px;padding:0">
             <li>Your <a href="#/profile" style="color:var(--accent)">search criteria</a> ${hasCriteria ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— not set yet</span>'}</li>
-            <li>Anthropic API key ${hasApiKey ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— not set yet</span>'}</li>
+            <li>${escapeHtml(authLabel)} ${hasAuth ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— set an API key or install the Claude CLI</span>'}</li>
           </ul>
         </div>
-        <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasApiKey) ? 'disabled' : ''}>
+        <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasAuth) ? 'disabled' : ''}>
           ${aiSearching ? 'Searching…' : 'Start AI Search'}
         </button>
-        ${(!hasCriteria || !hasApiKey) ? `
+        ${(!hasCriteria || !hasAuth) ? `
           <p class="text-muted text-sm mt-8">Fill in missing pieces above to enable.</p>
         ` : ''}
       </div>
