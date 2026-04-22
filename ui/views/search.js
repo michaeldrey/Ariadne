@@ -102,16 +102,33 @@ export async function renderSearch(container) {
     const btn = document.getElementById('btn-ai-search');
     btn.disabled = true;
     btn.textContent = 'Searching…';
-    // Explicitly tells Claude to call the MCP tool, otherwise it defaults to
-    // a markdown list in chat which isn't actionable from the Job Search
-    // table UI.
-    const prompt = `Use my search criteria (you already have it in context) to find 5-10 open job postings on the public web.
+    // Explicit tool usage + URL verification — without it, agents will
+    // happily invent plausible-looking URLs that 404. The MCP tool call
+    // at the end is what populates the Job Search table.
+    const prompt = `Find real, currently-open job postings matching my search criteria (you already have it in context).
 
-For each posting, extract: role title, company, direct URL to the posting (not a search page), location (or 'Remote'), whether it's remote (true/false if clear), salary range if posted, posted date in YYYY-MM-DD if visible, and one sentence on why it fits my criteria.
+## Process (follow this — don't guess)
+1. Use the WebSearch tool to find candidate postings. Query specific ATS domains that return real links, e.g.:
+   - \`site:boards.greenhouse.io <role keywords> <company keyword or level>\`
+   - \`site:jobs.lever.co <role keywords>\`
+   - \`site:jobs.ashbyhq.com <role keywords>\`
+   - Plus direct company career pages when a target company is in my criteria.
+2. For EACH candidate URL, use the WebFetch tool to open the page and verify:
+   - It loads (not 404, not a login wall, not a search page)
+   - It IS a job posting (not a blog, not a generic careers page)
+   - The role actually matches my criteria (don't stretch)
+   - Extract title, company, location, remote status, salary if posted, posted date if visible
+3. Only include verified postings. If you can only verify 3, return 3 — don't pad with unverified ones.
 
-When you've got the list, call the \`report_job_matches\` tool with ALL matches in a single call. That populates the results table in the Job Search view. Then write a brief 1-2 sentence summary in chat — don't repeat the list, the table has it.
+## Rules
+- DO NOT invent URLs. Every URL you report must come from a real WebFetch that returned a valid job page.
+- Skip LinkedIn (URLs return login walls), Indeed (requires auth), and anything more than 60 days old.
+- If WebSearch is giving you weak results, try different queries before giving up.
 
-Skip LinkedIn (URLs won't work), jobs obviously behind logins, and anything more than 60 days old. Order best-fit first.`;
+## Output
+Call the \`report_job_matches\` tool exactly once, with ALL verified matches in the single call. Fields: title, company, url, location, remote (bool), salary, posted_date (YYYY-MM-DD), reason (one sentence).
+
+Then in chat, write a 1-2 sentence summary of what you found and any notable caveats (e.g. "only found 3 verifiable matches because queries returned mostly aggregator URLs"). Don't repeat the list — the table shows it.`;
     try {
       await openProfileChatAndSend(prompt, 'jobsearch');
     } catch (err) {
