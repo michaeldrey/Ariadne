@@ -12,7 +12,10 @@ let closedExpanded = false;
 export async function renderDashboard(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading dashboard...</div>';
 
-  const allRoles = await invoke('list_roles', { status: null });
+  const [allRoles, settings] = await Promise.all([
+    invoke('list_roles', { status: null }),
+    invoke('get_settings'),
+  ]);
   const active = allRoles.filter(r => r.status === 'active');
   const closed = allRoles.filter(r => r.status === 'closed');
 
@@ -30,8 +33,13 @@ export async function renderDashboard(container) {
   STAGES.forEach(s => stageCounts[s] = 0);
   active.forEach(r => { if (stageCounts[r.stage] !== undefined) stageCounts[r.stage]++; });
 
+  const checklist = buildSetupChecklist(settings, allRoles.length);
+  const showWelcome = checklist.some(item => !item.done);
+
   container.innerHTML = `
     <h2>Dashboard</h2>
+
+    ${showWelcome ? renderWelcomeCard(checklist) : ''}
 
     <div class="kpi-grid">
       <div class="kpi-card accent">
@@ -265,6 +273,41 @@ function wireStageDropdowns(scope, afterChange) {
       }
     });
   });
+}
+
+function buildSetupChecklist(settings, roleCount) {
+  const has = (v) => typeof v === 'string' && v.trim().length > 0;
+  return [
+    { key: 'api', label: 'Add your Anthropic API key', href: '#/settings',   done: has(settings?.anthropic_api_key) },
+    { key: 'name', label: 'Set your name',              href: '#/profile',   done: has(settings?.profile_name) },
+    { key: 'resume', label: 'Paste your master resume', href: '#/profile',   done: has(settings?.resume_content) },
+    { key: 'stories', label: 'Generate work stories',   href: '#/profile',   done: has(settings?.work_stories) },
+    { key: 'role',  label: 'Add your first role',       href: '#/roles',     done: roleCount > 0 },
+  ];
+}
+
+function renderWelcomeCard(checklist) {
+  const done = checklist.filter(i => i.done).length;
+  const total = checklist.length;
+  return `
+    <div class="card welcome-card mb-16">
+      <div class="card-header">
+        <h3>Getting Started · ${done}/${total}</h3>
+        <span class="text-muted text-sm">This card disappears when everything's set.</span>
+      </div>
+      <ul class="checklist">
+        ${checklist.map(item => `
+          <li class="${item.done ? 'done' : ''}">
+            <span class="check">${item.done ? '✓' : '○'}</span>
+            ${item.done
+              ? `<span>${escapeHtml(item.label)}</span>`
+              : `<a href="${item.href}">${escapeHtml(item.label)}</a>`
+            }
+          </li>
+        `).join('')}
+      </ul>
+    </div>
+  `;
 }
 
 function wirePipeline(container, active, closed) {

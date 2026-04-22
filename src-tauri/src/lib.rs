@@ -48,6 +48,7 @@ pub fn run() {
             // Claude AI
             commands::claude::tailor_resume,
             commands::claude::generate_research,
+            commands::claude::generate_work_stories,
             // Job Search
             commands::search::run_job_search,
             commands::search::quick_add_from_search,
@@ -58,9 +59,11 @@ pub fn run() {
             commands::import::import_role_artifacts,
             // Agent chat
             commands::agent::get_or_create_conversation,
+            commands::agent::get_or_create_profile_conversation,
             commands::agent::list_messages,
             commands::agent::list_artifacts,
             commands::agent::send_message,
+            commands::agent::send_profile_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

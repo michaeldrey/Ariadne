@@ -238,6 +238,111 @@ A condensed 10-line cheat sheet for interview day"#
     Ok(ResearchResult { research_packet })
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct GenerateStoriesResult {
+    pub work_stories: String,
+    pub count: i32,
+}
+
+#[tauri::command]
+pub async fn generate_work_stories(
+    db: State<'_, Database>,
+) -> Result<GenerateStoriesResult, String> {
+    let (api_key, resume_content, profile_name) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        let key: Option<String> = conn
+            .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let resume: Option<String> = conn
+            .query_row("SELECT resume_content FROM settings WHERE id = 1", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let name: Option<String> = conn
+            .query_row("SELECT profile_name FROM settings WHERE id = 1", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        (key, resume, name)
+    };
+
+    let api_key = api_key.ok_or("No Anthropic API key configured. Add one in Settings.")?;
+    let resume = resume_content.ok_or("No master resume. Add it on the Profile page first.")?;
+
+    let name_bit = profile_name
+        .map(|n| format!("The candidate is {}.\n", n))
+        .unwrap_or_default();
+
+    let prompt = format!(
+        r#"You are a senior interview coach. From the candidate's resume below, extract 6–10 distinct STAR-format interview stories covering a diverse range of situations (technical wins, leadership/influence, conflict, ambiguity, failure-and-learning, cross-functional collaboration). Pick the most concrete, high-impact moments.
+
+{name_bit}
+## Resume
+{resume}
+
+## Output
+Respond with ONLY the stories, in this exact markdown format. No preamble, no commentary.
+
+## Short Story Title 1
+
+**Situation:** 2–3 sentences setting the scene. Company/context, scope, stakeholders.
+
+**Task:** 1–2 sentences — what you were responsible for, the outcome you needed.
+
+**Action:** 4–8 bullets — specific things YOU did. Use "I" not "we." Technical and non-technical actions.
+
+**Result:** 2–4 bullets — quantified outcomes where possible. Promotions, adoption numbers, latency/cost wins, team growth.
+
+## Short Story Title 2
+
+...
+"#
+    );
+
+    let body = serde_json::json!({
+        "model": CLAUDE_MODEL,
+        "max_tokens": 4096,
+        "messages": [{"role": "user", "content": prompt}]
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(API_URL)
+        .header("x-api-key", &api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Claude API error ({}): {}", status, text));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let work_stories = json["content"][0]["text"]
+        .as_str()
+        .ok_or("Unexpected API response format")?
+        .trim()
+        .to_string();
+
+    // Count stories by `## ` headers.
+    let count = work_stories
+        .lines()
+        .filter(|l| l.starts_with("## "))
+        .count() as i32;
+
+    {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE settings SET work_stories = ?1, updated_at = datetime('now') WHERE id = 1",
+            params![work_stories],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(GenerateStoriesResult { work_stories, count })
+}
+
 fn extract_overall_score(analysis: &str) -> Option<i32> {
     // Look for "Overall: X/100" pattern
     for line in analysis.lines() {

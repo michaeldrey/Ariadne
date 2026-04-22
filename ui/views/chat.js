@@ -1,50 +1,78 @@
 import { invoke, escapeHtml, renderMarkdown, toast } from '../app.js';
 
-let currentRoleId = null;
+// Scope shape:
+//   { type: 'role', role: {id, company, title} }
+//   { type: 'profile' }
+let currentScope = null;
 let currentConversationId = null;
 let unlisten = null;
 let streamingMessageEl = null;
 let pendingToolBubbles = new Map();
 
+// ── Public API ──
+
 export async function openChat(role) {
-  // Idempotent: if already open for this role, just focus input.
-  if (currentRoleId === role.id) {
+  return openScope({ type: 'role', role });
+}
+
+export async function openChatAndSend(role, text) {
+  await openChat(role);
+  return sendAfterOpen(text);
+}
+
+export async function openProfileChat() {
+  return openScope({ type: 'profile' });
+}
+
+export async function openProfileChatAndSend(text) {
+  await openProfileChat();
+  return sendAfterOpen(text);
+}
+
+export async function closeChat() {
+  const drawer = document.getElementById('chat-drawer');
+  if (!drawer) return;
+  drawer.classList.remove('chat-open');
+  drawer.classList.add('chat-closed');
+  drawer.innerHTML = '';
+  currentScope = null;
+  currentConversationId = null;
+  streamingMessageEl = null;
+  pendingToolBubbles.clear();
+  if (unlisten) {
+    try { unlisten(); } catch {}
+    unlisten = null;
+  }
+}
+
+export function isChatOpenForRole(roleId) {
+  return currentScope?.type === 'role' && currentScope.role.id === roleId;
+}
+
+export function getCurrentChatScopeType() {
+  return currentScope?.type || null;
+}
+
+// ── Internals ──
+
+async function openScope(scope) {
+  // Idempotent: if already open for same scope, focus input.
+  if (sameScope(currentScope, scope)) {
     document.getElementById('chat-input')?.focus();
     return;
   }
+  if (currentScope) await closeChat();
 
-  // If open for a different role, tear down first.
-  if (currentRoleId) await closeChat();
-
-  currentRoleId = role.id;
+  currentScope = scope;
   const drawer = document.getElementById('chat-drawer');
   drawer.classList.remove('chat-closed');
   drawer.classList.add('chat-open');
 
-  drawer.innerHTML = `
-    <div class="chat-header">
-      <h4>Chat · ${escapeHtml(role.company)} — ${escapeHtml(role.title)}</h4>
-      <button class="btn-icon" id="chat-close" title="Close chat">×</button>
-    </div>
-    <div class="chat-messages" id="chat-messages">
-      <div class="chat-empty">Loading…</div>
-    </div>
-    <div class="chat-input-area">
-      <div class="chat-chips chat-chips-persistent">
-        <button class="chat-chip" data-prompt="Tailor my resume for this role.">Tailor resume</button>
-        <button class="chat-chip" data-prompt="Generate a research packet for this company and role.">Research company</button>
-        <button class="chat-chip" data-prompt="Draft an intro message I could send to a hiring manager or recruiter for this role.">Draft outreach</button>
-      </div>
-      <div class="chat-input-row">
-        <textarea id="chat-input" placeholder="Ask about this role…" rows="1"></textarea>
-        <button class="btn btn-primary btn-sm chat-send-btn" id="chat-send">Send</button>
-      </div>
-      <div class="chat-status" id="chat-status"></div>
-    </div>
-  `;
+  drawer.innerHTML = renderShell(scope);
 
   document.getElementById('chat-close').addEventListener('click', closeChat);
   document.getElementById('chat-send').addEventListener('click', sendCurrent);
+
   drawer.querySelectorAll('.chat-chips-persistent .chat-chip').forEach(btn => {
     btn.addEventListener('click', () => {
       const input = document.getElementById('chat-input');
@@ -64,7 +92,9 @@ export async function openChat(role) {
   input.addEventListener('input', () => autoGrow(input));
 
   try {
-    const conv = await invoke('get_or_create_conversation', { roleId: role.id });
+    const conv = scope.type === 'role'
+      ? await invoke('get_or_create_conversation', { roleId: scope.role.id })
+      : await invoke('get_or_create_profile_conversation');
     currentConversationId = conv.id;
     const messages = await invoke('list_messages', { conversationId: conv.id });
     renderMessages(messages);
@@ -76,24 +106,61 @@ export async function openChat(role) {
   input.focus();
 }
 
-export async function closeChat() {
-  const drawer = document.getElementById('chat-drawer');
-  if (!drawer) return;
-  drawer.classList.remove('chat-open');
-  drawer.classList.add('chat-closed');
-  drawer.innerHTML = '';
-  currentRoleId = null;
-  currentConversationId = null;
-  streamingMessageEl = null;
-  pendingToolBubbles.clear();
-  if (unlisten) {
-    try { unlisten(); } catch {}
-    unlisten = null;
-  }
+function renderShell(scope) {
+  const header = scope.type === 'role'
+    ? `Chat · ${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`
+    : `Profile Coach`;
+
+  const chips = scope.type === 'role'
+    ? [
+        { label: 'Tailor resume', prompt: 'Tailor my resume for this role.' },
+        { label: 'Research company', prompt: 'Generate a research packet for this company and role.' },
+        { label: 'Draft outreach', prompt: 'Draft an intro message I could send to a hiring manager or recruiter for this role.' },
+      ]
+    : [
+        { label: 'Build STAR stories', prompt: 'Interview me to build STAR stories from my resume. Ask one focused question at a time.' },
+        { label: 'Refine search criteria', prompt: 'Help me clarify my search criteria — target companies, level, comp, must-haves, dealbreakers.' },
+        { label: 'Update profile about', prompt: "Help me write a tight profile 'about' section — background, career arc, what I'm looking for next." },
+      ];
+
+  const placeholder = scope.type === 'role'
+    ? 'Ask about this role…'
+    : 'Ask about your profile, stories, or search…';
+
+  return `
+    <div class="chat-header">
+      <h4>${header}</h4>
+      <button class="btn-icon" id="chat-close" title="Close chat">×</button>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-empty">Loading…</div>
+    </div>
+    <div class="chat-input-area">
+      <div class="chat-chips chat-chips-persistent">
+        ${chips.map(c => `<button class="chat-chip" data-prompt="${escapeHtml(c.prompt)}">${escapeHtml(c.label)}</button>`).join('')}
+      </div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="${placeholder}" rows="1"></textarea>
+        <button class="btn btn-primary btn-sm chat-send-btn" id="chat-send">Send</button>
+      </div>
+      <div class="chat-status" id="chat-status"></div>
+    </div>
+  `;
 }
 
-export function isChatOpenForRole(roleId) {
-  return currentRoleId === roleId;
+function sameScope(a, b) {
+  if (!a || !b) return false;
+  if (a.type !== b.type) return false;
+  if (a.type === 'role') return a.role.id === b.role.id;
+  return true; // profile scope is singleton
+}
+
+async function sendAfterOpen(text) {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  input.value = text;
+  await new Promise(r => setTimeout(r, 0));
+  sendCurrent();
 }
 
 async function subscribeToEvents() {
@@ -108,7 +175,6 @@ function handleEvent(evt) {
 
   switch (evt.type) {
     case 'turn_started': {
-      // Clear empty-state if present.
       const empty = container.querySelector('.chat-empty');
       if (empty) empty.remove();
       streamingMessageEl = document.createElement('div');
@@ -144,12 +210,10 @@ function handleEvent(evt) {
           <span class="tool-summary">running…</span>
         </div>
       `;
-      // Insert before the cursor so cursor stays at bottom.
       const cursor = bubble.querySelector('.chat-cursor');
       if (cursor) bubble.insertBefore(toolEl, cursor);
       else bubble.appendChild(toolEl);
       pendingToolBubbles.set(evt.tool_use_id, toolEl);
-      // Close the current text accumulator so subsequent text starts fresh after the tool.
       const acc = bubble.querySelector('.text-accumulator.active');
       if (acc) acc.classList.remove('active');
       scrollToBottom();
@@ -184,7 +248,6 @@ function handleEvent(evt) {
     case 'user_message_saved':
     case 'assistant_message_saved':
     case 'tool_results_saved':
-      // Informational; UI is built live, no action needed.
       break;
   }
 }
@@ -193,7 +256,6 @@ function ensureTextAccumulator() {
   if (!streamingMessageEl) return;
   const bubble = streamingMessageEl.querySelector('.chat-bubble');
   if (!bubble) return;
-  // Only one accumulator can be "active" at a time. Once a tool runs we close it.
   if (bubble.querySelector('.text-accumulator.active')) return;
   const cursor = bubble.querySelector('.chat-cursor');
   const acc = document.createElement('div');
@@ -220,9 +282,8 @@ function removeStreamingCursor() {
 async function sendCurrent() {
   const input = document.getElementById('chat-input');
   const text = input?.value.trim();
-  if (!text || !currentRoleId) return;
+  if (!text || !currentScope) return;
 
-  // Optimistic user message.
   const container = document.getElementById('chat-messages');
   const empty = container?.querySelector('.chat-empty');
   if (empty) empty.remove();
@@ -233,7 +294,11 @@ async function sendCurrent() {
   setStatus('Thinking…');
 
   try {
-    await invoke('send_message', { roleId: currentRoleId, userText: text });
+    if (currentScope.type === 'role') {
+      await invoke('send_message', { roleId: currentScope.role.id, userText: text });
+    } else {
+      await invoke('send_profile_message', { userText: text });
+    }
   } catch (err) {
     setStatus(err.toString(), true);
   }
@@ -256,15 +321,13 @@ function renderMessages(messages) {
   container.innerHTML = '';
 
   if (!messages || messages.length === 0) {
-    container.innerHTML = `
-      <div class="chat-empty">
-        <p>Start a conversation about this role. Pick a suggestion below or ask anything.</p>
-      </div>
-    `;
+    const hint = currentScope?.type === 'profile'
+      ? `Talk to your Profile Coach. Try a suggestion below, or ask anything.`
+      : `Start a conversation about this role. Pick a suggestion below or ask anything.`;
+    container.innerHTML = `<div class="chat-empty"><p>${hint}</p></div>`;
     return;
   }
 
-  // Map tool_use_id → tool_result block for assistant-tool pairing.
   const toolResults = new Map();
   for (const m of messages) {
     const blocks = Array.isArray(m.content) ? m.content : [];
@@ -280,7 +343,7 @@ function renderMessages(messages) {
 
     if (m.role === 'user') {
       const textBlocks = blocks.filter(b => b.type === 'text');
-      if (textBlocks.length === 0) continue; // skip pure tool_result messages
+      if (textBlocks.length === 0) continue;
       const el = document.createElement('div');
       el.className = 'chat-msg user';
       el.innerHTML = `

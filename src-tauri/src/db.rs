@@ -168,5 +168,36 @@ fn migrate(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    if current < 4 {
+        // v4: conversations gains scope_type ('role' | 'profile'); role_id becomes nullable.
+        // SQLite can't ALTER COLUMN — rebuild table preserving ids so messages FK stays valid.
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys=OFF;
+
+            CREATE TABLE conversations_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_type TEXT NOT NULL DEFAULT 'role',
+                role_id TEXT REFERENCES roles(id) ON DELETE CASCADE,
+                title TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO conversations_new (id, scope_type, role_id, title, created_at, updated_at)
+            SELECT id, 'role', role_id, title, created_at, updated_at FROM conversations;
+
+            DROP TABLE conversations;
+            ALTER TABLE conversations_new RENAME TO conversations;
+
+            CREATE UNIQUE INDEX idx_conv_role ON conversations(role_id) WHERE role_id IS NOT NULL;
+            CREATE UNIQUE INDEX idx_conv_profile ON conversations(scope_type) WHERE scope_type = 'profile';
+
+            PRAGMA foreign_keys=ON;
+            PRAGMA user_version = 4;
+            ",
+        )?;
+    }
+
     Ok(())
 }

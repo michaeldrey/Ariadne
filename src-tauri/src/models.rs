@@ -201,7 +201,8 @@ pub struct ResearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: i64,
-    pub role_id: String,
+    pub scope_type: String,      // "role" | "profile"
+    pub role_id: Option<String>, // NULL when scope_type = "profile"
     pub title: Option<String>,
     pub created_at: String,
     pub updated_at: String,

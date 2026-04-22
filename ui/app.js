@@ -17,6 +17,7 @@ const routes = {
   '/contacts': 'contacts',
   '/contacts/:id': 'contactDetail',
   '/search': 'search',
+  '/profile': 'profile',
   '/settings': 'settings',
 };
 
@@ -43,7 +44,8 @@ import { renderTasks } from './views/tasks.js';
 import { renderContacts, renderContactDetail } from './views/contacts.js';
 import { renderSearch } from './views/search.js';
 import { renderSettings } from './views/settings.js';
-import { closeChat } from './views/chat.js';
+import { renderProfile } from './views/profile.js';
+import { closeChat, getCurrentChatScopeType } from './views/chat.js';
 
 async function renderView() {
   const { view, params } = getRoute();
@@ -57,8 +59,13 @@ async function renderView() {
       (view === 'contactDetail' && link.dataset.view === 'contacts'));
   });
 
-  // Chat drawer is role-scoped — close it when leaving role detail.
-  if (view !== 'roleDetail') {
+  // Chat drawer is scope-aware — keep open only when the current scope matches
+  // the new view. Role scope lives on roleDetail; profile scope lives on profile.
+  const chatScope = getCurrentChatScopeType();
+  const keepChat =
+    (view === 'roleDetail' && chatScope === 'role') ||
+    (view === 'profile' && chatScope === 'profile');
+  if (!keepChat) {
     closeChat().catch(() => {});
   }
 
@@ -84,6 +91,9 @@ async function renderView() {
         break;
       case 'search':
         await renderSearch(container);
+        break;
+      case 'profile':
+        await renderProfile(container);
         break;
       case 'settings':
         await renderSettings(container);
@@ -200,7 +210,8 @@ window.addEventListener('hashchange', renderView);
 document.getElementById('nav-back').addEventListener('click', () => window.history.back());
 document.getElementById('nav-forward').addEventListener('click', () => window.history.forward());
 
-// Cmd-[ / Cmd-] keyboard shortcuts (Mac convention).
+// Keyboard shortcuts.
+// Cmd-[/] for history nav; Cmd-R for reload (Tauri webviews don't bind it by default).
 document.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey)) return;
   if (e.key === '[') {
@@ -209,6 +220,9 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === ']') {
     e.preventDefault();
     window.history.forward();
+  } else if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault();
+    window.location.reload();
   }
 });
 

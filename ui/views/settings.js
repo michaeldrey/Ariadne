@@ -1,32 +1,4 @@
-import { invoke, escapeHtml, toast, showModal, closeModal, renderMarkdown } from '../app.js';
-
-// Parse markdown work stories into [{title, situation, task, action, result}]
-// Expects `## Title` headers with `**Section:**` labeled blocks beneath.
-function parseStories(md) {
-  if (!md) return [];
-  const stories = [];
-  const blocks = md.split(/^##\s+/m).slice(1); // first slice is pre-header preamble
-  for (const block of blocks) {
-    const firstNL = block.indexOf('\n');
-    const title = (firstNL === -1 ? block : block.slice(0, firstNL)).trim();
-    const body = firstNL === -1 ? '' : block.slice(firstNL + 1);
-    const section = (label) => {
-      const re = new RegExp(`\\*\\*${label}:\\*\\*\\s*([\\s\\S]*?)(?=\\n\\*\\*\\w+:\\*\\*|$)`, 'i');
-      const m = body.match(re);
-      return m ? m[1].trim() : '';
-    };
-    stories.push({
-      title,
-      situation: section('Situation'),
-      task: section('Task'),
-      action: section('Action'),
-      result: section('Result'),
-    });
-  }
-  return stories;
-}
-
-let editingStories = false;
+import { invoke, escapeHtml, toast, showModal, closeModal } from '../app.js';
 
 export async function renderSettings(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading settings...</div>';
@@ -35,6 +7,7 @@ export async function renderSettings(container) {
 
   container.innerHTML = `
     <h2>Settings</h2>
+    <p class="text-muted text-sm mb-16">App configuration. Your personal content lives under <a href="#/profile" style="color:var(--accent)">Profile</a>.</p>
 
     <div class="card mb-16">
       <h3>API Keys</h3>
@@ -46,12 +19,13 @@ export async function renderSettings(container) {
           <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
           ${settings.anthropic_api_key ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
         </div>
-        <p class="text-muted text-sm mt-8">Required for resume tailoring and research packet generation</p>
+        <p class="text-muted text-sm mt-8">Required for resume tailoring, research, and chat. Get one at <code>console.anthropic.com</code>.</p>
       </div>
     </div>
 
     <div class="card mb-16">
       <h3>Job Search Backend</h3>
+      <p class="text-muted text-sm mb-8">Ariadne ships open-source without a built-in search backend. Plug your own in here, or skip and add roles manually.</p>
       <div class="form-group">
         <label>Search Backend</label>
         <select id="search-backend">
@@ -68,46 +42,6 @@ export async function renderSettings(container) {
         <input type="password" id="jobbot-key" value="${settings.jobbot_api_key || ''}" placeholder="API key" />
       </div>
       <button class="btn btn-sm btn-primary" id="btn-save-search">Save Search Config</button>
-    </div>
-
-    <div class="card mb-16">
-      <h3>Profile</h3>
-      <div class="form-group">
-        <label>Name</label>
-        <input type="text" id="profile-name" value="${escapeHtml(settings.profile_name) || ''}" placeholder="Your name" />
-      </div>
-      <div class="form-group">
-        <label>Resume PDF Filename</label>
-        <input type="text" id="resume-filename" value="${escapeHtml(settings.resume_filename) || 'Resume.pdf'}" placeholder="Resume.pdf" />
-      </div>
-      <div class="form-group">
-        <label>Profile (markdown)</label>
-        <textarea id="profile-md" placeholder="Background, target roles, compensation goals…" style="min-height:140px">${escapeHtml(settings.profile_json) || ''}</textarea>
-      </div>
-      <button class="btn btn-sm btn-primary" id="btn-save-profile">Save Profile</button>
-    </div>
-
-    <div class="card mb-16">
-      <h3>Search Criteria</h3>
-      <p class="text-muted text-sm mb-8">Used by Claude when helping you evaluate roles or search.</p>
-      <textarea id="search-criteria" placeholder="Target companies, excluded companies, must-haves, dealbreakers…" style="min-height:160px">${escapeHtml(settings.search_criteria) || ''}</textarea>
-      <button class="btn btn-sm btn-primary mt-16" id="btn-save-search-criteria">Save Search Criteria</button>
-    </div>
-
-    <div class="card mb-16">
-      <h3>Resume Content</h3>
-      <p class="text-muted text-sm mb-8">Your master resume in markdown. Used as the source for all tailored resumes.</p>
-      <textarea id="resume-content" style="min-height:200px">${escapeHtml(settings.resume_content) || ''}</textarea>
-      <button class="btn btn-sm btn-primary mt-16" id="btn-save-resume">Save Resume</button>
-    </div>
-
-    <div class="card mb-16">
-      <div class="card-header">
-        <h3>Work Stories (STAR)</h3>
-        <button class="btn btn-sm ${editingStories ? 'btn-primary' : ''}" id="btn-toggle-stories-edit">${editingStories ? 'Save & View' : 'Edit Markdown'}</button>
-      </div>
-      <p class="text-muted text-sm mb-16">Interview stories referenced during resume tailoring. Format: <code>## Title</code> then <code>**Situation:**</code>, <code>**Task:**</code>, <code>**Action:**</code>, <code>**Result:**</code> blocks.</p>
-      <div id="stories-body"></div>
     </div>
 
     <div class="card mb-16">
@@ -155,55 +89,6 @@ export async function renderSettings(container) {
     } catch (err) { toast(err.toString(), 'error'); }
   });
 
-  // Save profile
-  document.getElementById('btn-save-profile').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', {
-        data: {
-          profile_name: document.getElementById('profile-name').value || null,
-          resume_filename: document.getElementById('resume-filename').value || null,
-          profile_json: document.getElementById('profile-md').value || null,
-        }
-      });
-      toast('Profile saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
-  });
-
-  // Save search criteria
-  document.getElementById('btn-save-search-criteria').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', { data: { search_criteria: document.getElementById('search-criteria').value || null } });
-      toast('Search criteria saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
-  });
-
-  // Save resume
-  document.getElementById('btn-save-resume').addEventListener('click', async () => {
-    try {
-      await invoke('update_settings', { data: { resume_content: document.getElementById('resume-content').value } });
-      toast('Resume saved', 'success');
-    } catch (err) { toast(err.toString(), 'error'); }
-  });
-
-  // Stories: render body & wire up toggle
-  renderStoriesBody(settings.work_stories || '');
-
-  document.getElementById('btn-toggle-stories-edit').addEventListener('click', async () => {
-    if (editingStories) {
-      // Currently editing → save and switch to view
-      const value = document.getElementById('work-stories').value;
-      try {
-        await invoke('update_settings', { data: { work_stories: value } });
-        toast('Work stories saved', 'success');
-        editingStories = false;
-        renderSettings(container);
-      } catch (err) { toast(err.toString(), 'error'); }
-    } else {
-      editingStories = true;
-      renderSettings(container);
-    }
-  });
-
   // Import handlers
   document.getElementById('btn-import-tracker').addEventListener('click', () => showImportModal('tracker'));
   document.getElementById('btn-import-contacts').addEventListener('click', () => showImportModal('contacts'));
@@ -220,7 +105,7 @@ function showRoleFoldersImportModal() {
       <code>Applied</code>, <code>Closed</code>, <code>InProgress</code>,
       <code>Rejected</code> folders (matched by <code>"Company - Title"</code>).
       <br>• Top-level <code>resume-content.md</code>, <code>work-stories.md</code>,
-      <code>profile.md</code>, <code>search-criteria.md</code> into Settings fields
+      <code>profile.md</code>, <code>search-criteria.md</code> into Profile fields
       (only if currently empty).
       <br>Safe to re-run — nothing is overwritten or duplicated.
     </p>
@@ -264,64 +149,6 @@ function showRoleFoldersImportModal() {
       resultEl.innerHTML = `<p style="color:var(--red)">${escapeHtml(err.toString())}</p>`;
       toast(err.toString(), 'error');
     }
-  });
-}
-
-function renderStoriesBody(md) {
-  const el = document.getElementById('stories-body');
-
-  if (editingStories) {
-    el.innerHTML = `
-      <textarea id="work-stories" style="min-height:360px" placeholder="## My Story Title
-
-**Situation:** ...
-
-**Task:** ...
-
-**Action:** ...
-
-**Result:** ...">${escapeHtml(md)}</textarea>
-    `;
-    return;
-  }
-
-  const stories = parseStories(md);
-  if (stories.length === 0) {
-    el.innerHTML = `<div class="empty-state"><p>No stories yet. Click "Edit Markdown" to add some.</p></div>`;
-    return;
-  }
-
-  el.innerHTML = stories.map((s, i) => {
-    const preview = (s.result || s.action || s.situation || '').slice(0, 150);
-    return `
-      <div class="story-card" data-story-idx="${i}">
-        <div class="story-header">
-          <div>
-            <div class="story-title">${escapeHtml(s.title)}</div>
-            <div class="story-preview">${escapeHtml(preview)}${preview.length >= 150 ? '…' : ''}</div>
-          </div>
-          <button class="btn btn-sm" data-toggle-story="${i}">Expand</button>
-        </div>
-        <div class="story-body hidden" data-story-body="${i}">
-          ${['situation', 'task', 'action', 'result'].map(key => s[key] ? `
-            <div class="story-section">
-              <div class="story-label">${key}</div>
-              <div class="markdown-content">${renderMarkdown(s[key])}</div>
-            </div>
-          ` : '').join('')}
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  el.querySelectorAll('[data-toggle-story]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const i = btn.dataset.toggleStory;
-      const body = el.querySelector(`[data-story-body="${i}"]`);
-      const expanded = !body.classList.contains('hidden');
-      body.classList.toggle('hidden', expanded);
-      btn.textContent = expanded ? 'Expand' : 'Collapse';
-    });
   });
 }
 

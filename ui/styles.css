@@ -684,6 +684,13 @@ thead th[data-sort-key] {
   color: var(--text-primary);
 }
 
+.story-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  font-family: var(--font-mono);
+}
+
 .story-preview {
   font-size: 12px;
   color: var(--text-muted);
@@ -708,6 +715,49 @@ thead th[data-sort-key] {
   letter-spacing: 0.5px;
   margin-bottom: 4px;
 }
+
+/* ── Welcome / setup checklist ── */
+.welcome-card {
+  border-left: 3px solid var(--accent);
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checklist li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.checklist li .check {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.checklist li.done .check { color: var(--green); }
+.checklist li.done { color: var(--text-muted); }
+
+.checklist li a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.checklist li a:hover { text-decoration: underline; }
 
 /* ── Chat drawer ── */
 #chat-drawer {

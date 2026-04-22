@@ -2,7 +2,7 @@ import {
   invoke, escapeHtml, formatDate, stageBadgeClass, fitScoreClass,
   toast, showModal, closeModal, navigate, renderMarkdown,
 } from '../app.js';
-import { openChat, closeChat } from './chat.js';
+import { openChat, closeChat, openChatAndSend } from './chat.js';
 
 const STAGES = ['Sourced', 'Applied', 'Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'];
 const OUTCOMES = ['Rejected', 'Withdrew', 'Accepted', 'Expired'];
@@ -584,24 +584,12 @@ function renderRoleHeader(role) {
     openChat(role);
   });
 
-  document.getElementById('btn-tailor')?.addEventListener('click', async () => {
-    toast('Tailoring resume...', 'info');
-    try {
-      const result = await invoke('tailor_resume', { roleId: role.id });
-      activeContentTab = 'resume';
-      toast(`Resume tailored! Fit score: ${result.fit_score ?? 'N/A'}`, 'success');
-      renderRoleDetail(document.getElementById('view-container'), role.id);
-    } catch (err) { toast(err.toString(), 'error'); }
+  document.getElementById('btn-tailor')?.addEventListener('click', () => {
+    openChatAndSend(role, 'Tailor my resume for this role. Save the draft with save_artifact(kind: "resume"), save the fit analysis with save_artifact(kind: "analysis"), and update the fit score.');
   });
 
-  document.getElementById('btn-research')?.addEventListener('click', async () => {
-    toast('Generating research packet...', 'info');
-    try {
-      await invoke('generate_research', { roleId: role.id });
-      activeContentTab = 'research';
-      toast('Research packet generated!', 'success');
-      renderRoleDetail(document.getElementById('view-container'), role.id);
-    } catch (err) { toast(err.toString(), 'error'); }
+  document.getElementById('btn-research')?.addEventListener('click', () => {
+    openChatAndSend(role, 'Generate a research packet for this company and role — company overview, likely interview questions (technical, behavioral, system design), and questions I should ask. Save it with save_artifact(kind: "research").');
   });
 
   document.getElementById('btn-delete-role').addEventListener('click', async () => {
