@@ -378,6 +378,20 @@ td {
 
 .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ── Auth options (Settings → AI & Backends) ── */
+.auth-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.auth-option {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+.auth-option h4 { margin: 0 0 8px 0; font-size: 14px; }
+
 /* ── Job Search tier grid ── */
 .search-tier-grid {
   display: grid;

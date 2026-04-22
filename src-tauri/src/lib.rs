@@ -70,6 +70,7 @@ pub fn run() {
             commands::acp::runtime::send_to_conversation_acp,
             commands::acp::install::detect_acp_install,
             commands::acp::install::install_acp,
+            commands::acp::install::detect_claude_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

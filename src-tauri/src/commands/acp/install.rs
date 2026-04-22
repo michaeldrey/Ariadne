@@ -67,6 +67,44 @@ pub async fn detect_acp_install() -> Result<InstallStatus, String> {
     })
 }
 
+/// Detect whether the user has the Claude Code CLI (`claude` binary) on
+/// PATH — needed for Claude Pro/Max subscription auth. Doesn't verify login
+/// state; that lives in the macOS Keychain and isn't cheap to check from
+/// Rust. If the subprocess spawn later fails, the error bubbles up clearly.
+#[tauri::command]
+pub async fn detect_claude_cli() -> Result<InstallStatus, String> {
+    let which = Command::new("which")
+        .arg("claude")
+        .output()
+        .await
+        .map_err(|e| format!("which: {}", e))?;
+
+    if !which.status.success() {
+        return Ok(InstallStatus {
+            installed: false,
+            path: None,
+            version: None,
+            npm_available: true, // irrelevant for this check
+        });
+    }
+
+    let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+    let version = Command::new(&path)
+        .arg("--version")
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    Ok(InstallStatus {
+        installed: !path.is_empty(),
+        path: if path.is_empty() { None } else { Some(path) },
+        version,
+        npm_available: true,
+    })
+}
+
 /// Install `@zed-industries/claude-code-acp` globally. Returns combined
 /// stdout+stderr on success so the UI can display the install log.
 #[tauri::command]

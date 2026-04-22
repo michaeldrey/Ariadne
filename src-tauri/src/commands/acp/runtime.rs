@@ -102,34 +102,38 @@ impl AcpRuntime {
             return Ok(conn.clone());
         }
 
-        let api_key = resolve_api_key(&db)?;
+        // API key is OPTIONAL: if set, we forward it so claude-code-acp uses
+        // pay-per-token via the Anthropic API. If unset, we spawn without it
+        // and the subprocess uses the user's Claude Pro/Max subscription
+        // credentials (stored by `claude /login` from the Claude Code CLI).
+        let api_key = resolve_api_key_opt(&db);
+        let auth_mode = if api_key.is_some() { "API key" } else { "Claude Pro/Max subscription" };
+        eprintln!("[acp] auth: {}", auth_mode);
 
         // Prefer a globally-installed binary over `npx -y @latest` — npx
         // checks the npm registry every launch (adds ~1–30s). If the user
         // hasn't run the install wizard we fall back to npx so the app
         // still works out of the box.
-        let args: Vec<String> = match super::install::detect_acp_install().await.ok() {
+        let mut args: Vec<String> = vec![];
+        if let Some(key) = &api_key {
+            args.push(format!("ANTHROPIC_API_KEY={}", key));
+        }
+        match super::install::detect_acp_install().await.ok() {
             Some(status) if status.installed && status.path.is_some() => {
                 eprintln!(
                     "[acp] using installed binary {} (v{})",
                     status.path.as_deref().unwrap_or("?"),
                     status.version.as_deref().unwrap_or("?")
                 );
-                vec![
-                    format!("ANTHROPIC_API_KEY={}", api_key),
-                    status.path.clone().unwrap(),
-                ]
+                args.push(status.path.clone().unwrap());
             }
             _ => {
                 eprintln!("[acp] claude-code-acp not installed globally — falling back to npx (slower cold starts)");
-                vec![
-                    format!("ANTHROPIC_API_KEY={}", api_key),
-                    "npx".to_string(),
-                    "-y".to_string(),
-                    "@zed-industries/claude-code-acp@latest".to_string(),
-                ]
+                args.push("npx".to_string());
+                args.push("-y".to_string());
+                args.push("@zed-industries/claude-code-acp@latest".to_string());
             }
-        };
+        }
 
         let agent = AcpAgent::from_args(args)
             .map_err(|e| format!("building acp agent: {}", e))?
@@ -664,21 +668,21 @@ fn build_context_preamble(db: &Database, scope: &Scope) -> Option<String> {
     Some(parts.join("\n\n"))
 }
 
-/// Resolve the Anthropic API key. Process env wins if set; otherwise we fall
-/// back to the key the user stored via Settings (same source the direct-API
-/// path uses).
-fn resolve_api_key(db: &Database) -> Result<String, String> {
+/// Resolve the Anthropic API key if the user has one. Returns None to signal
+/// "use subscription auth" — we spawn claude-code-acp without
+/// ANTHROPIC_API_KEY and it uses Claude Pro/Max credentials from the
+/// Claude Code CLI login instead. Process env wins if set.
+fn resolve_api_key_opt(db: &Database) -> Option<String> {
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
         if !key.is_empty() {
-            return Ok(key);
+            return Some(key);
         }
     }
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let conn = db.0.lock().ok()?;
     let key: Option<String> = conn
         .query_row("SELECT anthropic_api_key FROM settings WHERE id = 1", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
+        .ok()?;
     key.filter(|k| !k.is_empty())
-        .ok_or_else(|| "No Anthropic API key — set one in Settings".to_string())
 }
 
 fn emit(app: &AppHandle, payload: Value) {

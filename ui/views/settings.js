@@ -62,27 +62,50 @@ function renderGeneral(el) {
 }
 
 function renderAiBackends(el, settings, container) {
+  const hasKey = (settings.anthropic_api_key || '').trim().length > 0;
+  const backend = settings.agent_backend || 'direct';
+
   el.innerHTML = `
     <div class="card mb-16">
-      <h3>Anthropic API Key</h3>
-      <p class="text-muted text-sm mb-8">Required for resume tailoring, research, and chat. Get one at <code>console.anthropic.com</code>.</p>
-      <div class="form-group">
-        <div class="flex gap-8">
-          <input type="password" id="anthropic-key" value="${escapeHtml(settings.anthropic_api_key) || ''}" placeholder="sk-ant-..." style="flex:1" />
-          <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
-          ${settings.anthropic_api_key ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
+      <h3>Authentication</h3>
+      <p class="text-muted text-sm mb-16">Two ways to pay the LLM. You only need one.</p>
+
+      <div id="auth-status" class="mb-16 text-sm">
+        <div class="text-muted">Checking…</div>
+      </div>
+
+      <div class="auth-options">
+        <div class="auth-option">
+          <h4>Claude Pro/Max subscription</h4>
+          <p class="text-muted text-sm mb-8">Flat monthly fee, no per-token billing. Requires the Claude Code CLI and a subscription. Only works with the ACP backend.</p>
+          <ol class="text-sm text-muted" style="margin:0 0 12px 18px;padding:0">
+            <li>Install the Claude Code CLI (<a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" style="color:var(--accent)">docs</a>).</li>
+            <li>Run <code>claude /login</code> in a terminal.</li>
+            <li>Leave the API Key below empty.</li>
+          </ol>
+        </div>
+        <div class="auth-option">
+          <h4>Anthropic API key</h4>
+          <p class="text-muted text-sm mb-8">Pay-per-token. Works with both Direct and ACP backends. Get one at <code>console.anthropic.com</code>.</p>
+          <div class="form-group">
+            <div class="flex gap-8">
+              <input type="password" id="anthropic-key" value="${escapeHtml(settings.anthropic_api_key) || ''}" placeholder="sk-ant-..." style="flex:1" />
+              <button class="btn btn-sm" id="btn-save-anthropic">Save</button>
+              ${hasKey ? '<button class="btn btn-sm btn-danger" id="btn-clear-anthropic">Clear</button>' : ''}
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
     <div class="card mb-16">
       <h3>Agent Backend</h3>
-      <p class="text-muted text-sm mb-8">Which engine runs chat + tool calls. ACP (Agent Client Protocol) uses the Zed-maintained <code>claude-code-acp</code> adapter — multi-vendor pluggable and required for future features. Direct hits the Anthropic API directly and is scheduled for removal.</p>
+      <p class="text-muted text-sm mb-8">Which engine runs chat + tool calls. ACP uses the Zed-maintained <code>claude-code-acp</code> adapter (multi-vendor pluggable, supports subscription auth). Direct hits the Anthropic API directly (API key only) and is scheduled for removal.</p>
       <div class="form-group">
         <label>Backend</label>
         <select id="agent-backend">
-          <option value="direct" ${(settings.agent_backend || 'direct') === 'direct' ? 'selected' : ''}>Direct (Anthropic Messages API)</option>
-          <option value="acp" ${settings.agent_backend === 'acp' ? 'selected' : ''}>ACP (claude-code-acp)</option>
+          <option value="direct" ${backend === 'direct' ? 'selected' : ''}>Direct (Anthropic Messages API)</option>
+          <option value="acp" ${backend === 'acp' ? 'selected' : ''}>ACP (claude-code-acp)</option>
         </select>
       </div>
       <button class="btn btn-sm btn-primary" id="btn-save-backend">Save Backend</button>
@@ -116,6 +139,42 @@ function renderAiBackends(el, settings, container) {
   });
 
   renderAcpInstallStatus();
+  renderAuthStatus(settings);
+}
+
+async function renderAuthStatus(settings) {
+  const el = document.getElementById('auth-status');
+  if (!el) return;
+  const hasKey = (settings.anthropic_api_key || '').trim().length > 0;
+  const backend = settings.agent_backend || 'direct';
+
+  if (hasKey) {
+    el.innerHTML = `<div style="color:var(--green)"><strong>✓ Using API key.</strong> Pay-per-token via Anthropic.</div>`;
+    return;
+  }
+
+  // No API key — status depends on backend + Claude CLI presence.
+  if (backend !== 'acp') {
+    el.innerHTML = `<div style="color:var(--yellow)"><strong>No auth configured.</strong> Either set an API key below, or switch the backend to ACP and use Claude Pro/Max.</div>`;
+    return;
+  }
+
+  let cli;
+  try {
+    cli = await invoke('detect_claude_cli');
+  } catch {
+    el.innerHTML = `<div style="color:var(--yellow)">Couldn't detect Claude CLI. Set an API key below or install the Claude Code CLI.</div>`;
+    return;
+  }
+  if (!cli.installed) {
+    el.innerHTML = `<div style="color:var(--yellow)"><strong>Claude Code CLI not installed.</strong> Install it (<a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" style="color:var(--accent)">docs</a>) to use Pro/Max auth, or set an API key below.</div>`;
+    return;
+  }
+  const version = cli.version ? ` (v${escapeHtml(cli.version)})` : '';
+  el.innerHTML = `
+    <div style="color:var(--green)"><strong>✓ Claude CLI detected${version}.</strong> If you've run <code>claude /login</code>, chat will use your Pro/Max subscription. No API key needed.</div>
+    <div class="text-muted text-xs mt-8">If you get an auth error when chatting, run <code>claude /login</code> in a terminal to refresh credentials.</div>
+  `;
 }
 
 function renderIntegrations(el, settings) {
