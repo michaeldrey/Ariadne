@@ -9,21 +9,42 @@ const AI_SEARCH_TARGET = 10;
 const AI_SEARCH_MAX_ROUNDS = 3;
 
 // AI Search runtime state — module-scoped so the search keeps running if the
-// user navigates away, and so re-renders re-hydrate the banner/button.
-let aiSearchState = 'idle'; // 'idle' | 'searching' | 'done'
+// user navigates away, and so re-renders re-hydrate the status panel.
+let aiSearchState = 'idle'; // 'idle' | 'searching' | 'success' | 'error'
 let aiSearchRound = 0;
 let aiSearchRoundMessage = '';
+let aiSearchDetailMessage = '';
+let aiSearchErrorMessage = '';
 let jobSearchConversationId = null;
+let aiSearchSuccessFadeTimer = null;
 
 // Structured job matches the agent has reported via commit_job_matches.
-// Accumulated across rounds within a single run (deduped by URL).
-let aiMatches = [];
+// Accumulates across rounds within a single run AND across sessions —
+// persisted to localStorage so closing the app or refreshing doesn't wipe
+// the table. Re-running AI Search appends verified-unique matches; the
+// agent is told about existing URLs so it hunts for different ones.
+const AI_MATCHES_KEY = 'ariadne.aiMatches';
+let aiMatches = loadAiMatches();
+
+function loadAiMatches() {
+  try {
+    const raw = localStorage.getItem(AI_MATCHES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function saveAiMatches() {
+  try { localStorage.setItem(AI_MATCHES_KEY, JSON.stringify(aiMatches)); }
+  catch { /* non-fatal */ }
+}
+
 // Per-match state for the Set Up button (role creation + JD fetch +
 // analysis). Keyed by URL.
 const settingUpByUrl = new Map();
 const createdRoleIdByUrl = new Map();
 
 let jobsMatchedUnlisten = null;
+let focusListenersWired = false;
 
 export async function renderSearch(container) {
   const settings = await invoke('get_settings');
@@ -62,6 +83,7 @@ export async function renderSearch(container) {
     const existing = new Set(aiMatches.map(m => m.url));
     const novel = incoming.filter(m => m && m.url && !existing.has(m.url));
     aiMatches = [...aiMatches, ...novel];
+    saveAiMatches();
     renderAiResults(container);
   });
 
@@ -85,7 +107,7 @@ export async function renderSearch(container) {
           </ul>
         </div>
         <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasAuth) || running ? 'disabled' : ''}>
-          ${running ? escapeHtml(aiSearchRoundMessage || 'Running…') : 'Start AI Search'}
+          ${running ? 'Running…' : 'Start AI Search'}
         </button>
         ${(!hasCriteria || !hasAuth) ? `
           <p class="text-muted text-sm mt-8">Fill in missing pieces above to enable.</p>
@@ -106,12 +128,15 @@ export async function renderSearch(container) {
       </div>
     </div>
 
+    <div id="ai-status-panel" class="ai-status-panel hidden"></div>
+
     <div id="ai-results" class="mt-16"></div>
     <div id="search-results" class="mt-16">
       ${searchResults ? renderJobBotResults(searchResults) : ''}
     </div>
   `;
 
+  renderAiStatusPanel();
   renderAiResults(container);
 
   document.getElementById('btn-ai-search')?.addEventListener('click', () => runAiSearch(container));
@@ -140,23 +165,29 @@ export async function renderSearch(container) {
 async function runAiSearch(container) {
   if (aiSearchState === 'searching') return;
   aiSearchState = 'searching';
-  aiMatches = [];           // fresh run — reset accumulator
+  // Persist prior matches — user asked for that so re-running appends
+  // new distinct matches rather than wiping. Dedup happens in the
+  // jobs:matched listener via a Set.
   aiSearchRound = 0;
   aiSearchRoundMessage = 'Starting…';
-  settingUpByUrl.clear();
-  createdRoleIdByUrl.clear();
-  renderAiResults(container);
-  updateAiSearchButton(container);
+  aiSearchDetailMessage = '';
+  aiSearchErrorMessage = '';
+  if (aiSearchSuccessFadeTimer) { clearTimeout(aiSearchSuccessFadeTimer); aiSearchSuccessFadeTimer = null; }
+  renderAiStatusPanel();
+  updateAiSearchButton();
+
+  const startCount = aiMatches.length;
 
   try {
     const convId = await ensureJobSearchConversation();
     for (let round = 1; round <= AI_SEARCH_MAX_ROUNDS; round++) {
-      if (aiMatches.length >= AI_SEARCH_TARGET) break;
+      if (aiMatches.length >= startCount + AI_SEARCH_TARGET) break;
 
       aiSearchRound = round;
-      const need = Math.max(1, AI_SEARCH_TARGET - aiMatches.length);
-      aiSearchRoundMessage = `Round ${round}/${AI_SEARCH_MAX_ROUNDS} — searching for ${need} more…`;
-      updateAiSearchButton(container);
+      const need = Math.max(1, AI_SEARCH_TARGET - (aiMatches.length - startCount));
+      aiSearchRoundMessage = `Round ${round} of ${AI_SEARCH_MAX_ROUNDS} — searching for ${need} more…`;
+      aiSearchDetailMessage = `${aiMatches.length - startCount} verified so far this run.`;
+      renderAiStatusPanel();
 
       const prompt = buildAiSearchPrompt(need, aiMatches);
       try {
@@ -165,44 +196,125 @@ async function runAiSearch(container) {
           userText: prompt,
         });
       } catch (err) {
-        toast(`AI Search round ${round} failed: ${err}`, 'error');
-        break;
+        aiSearchState = 'error';
+        aiSearchErrorMessage = `Round ${round} failed: ${err}`;
+        aiSearchRoundMessage = '';
+        renderAiStatusPanel();
+        updateAiSearchButton();
+        await fireAiSearchCompletionAlert({ failed: true, newCount: aiMatches.length - startCount });
+        return;
       }
     }
 
-    aiSearchState = 'done';
+    const newCount = aiMatches.length - startCount;
+    aiSearchState = 'success';
+    aiSearchRoundMessage = `Done — ${newCount} new verified match${newCount === 1 ? '' : 'es'} (${aiMatches.length} total).`;
+    aiSearchDetailMessage = newCount === 0
+      ? 'The agent couldn\'t verify any postings this run. Try adjusting your search criteria or re-running later.'
+      : '';
+    renderAiStatusPanel();
+    updateAiSearchButton();
+    // Auto-dismiss the success panel after 12s so the table isn't crowded.
+    aiSearchSuccessFadeTimer = setTimeout(() => {
+      if (aiSearchState === 'success') {
+        aiSearchState = 'idle';
+        renderAiStatusPanel();
+      }
+    }, 12_000);
+    await fireAiSearchCompletionAlert({ failed: false, newCount });
+  } catch (err) {
+    aiSearchState = 'error';
+    aiSearchErrorMessage = err.toString();
     aiSearchRoundMessage = '';
-    updateAiSearchButton(container);
+    renderAiStatusPanel();
+    updateAiSearchButton();
+    await fireAiSearchCompletionAlert({ failed: true, newCount: aiMatches.length - startCount });
+  }
+}
+
+// Route completion alerts based on app focus + current route:
+//   - App unfocused (user in another app): fire native notification AND
+//     bounce the dock (requestUserAttention) so they see it
+//   - App focused but on a different page: fire a toast so they know
+//     without leaving the current page
+//   - App focused on the Job Search page: nothing extra — the status
+//     panel is already visible and tells them
+async function fireAiSearchCompletionAlert({ failed, newCount }) {
+  const title = failed ? 'Ariadne: AI Search failed' : 'Ariadne: AI Search done';
+  const body = failed
+    ? (aiSearchErrorMessage || 'See Job Search for details')
+    : (newCount === 0
+      ? 'No new verifiable matches.'
+      : `${newCount} new verified match${newCount === 1 ? '' : 'es'} ready.`);
+
+  const focused = typeof document !== 'undefined' && document.hasFocus();
+  const onSearchPage = location.hash === '#/search';
+
+  if (!focused) {
+    // User is in another app entirely — native notification + dock bounce.
     try {
       const { isPermissionGranted, requestPermission, sendNotification } = window.__TAURI__.notification;
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
-      if (granted) {
-        sendNotification({
-          title: 'Ariadne: AI Search done',
-          body: `${aiMatches.length} verified match${aiMatches.length === 1 ? '' : 'es'} ready to review.`,
-        });
-      }
-    } catch { /* notifications optional */ }
-    toast(`AI Search done — ${aiMatches.length} verified match${aiMatches.length === 1 ? '' : 'es'}`,
-      aiMatches.length > 0 ? 'success' : 'info');
-  } catch (err) {
-    aiSearchState = 'done';
-    aiSearchRoundMessage = '';
-    updateAiSearchButton(container);
-    toast(err.toString(), 'error');
+      if (granted) sendNotification({ title, body });
+    } catch { /* optional */ }
+    try {
+      const win = window.__TAURI__.window.getCurrentWindow();
+      await win.requestUserAttention(failed ? 'Critical' : 'Informational');
+    } catch { /* optional; requires capability */ }
+  } else if (!onSearchPage) {
+    // User is in the app but on a different page — toast is the right surface.
+    toast(`${title}: ${body}`, failed ? 'error' : 'success');
   }
+  // else: status panel on the Job Search page is already visible. No extra noise.
 }
 
-function updateAiSearchButton(container) {
+function updateAiSearchButton() {
   const btn = document.getElementById('btn-ai-search');
   if (!btn) return;
+  btn.disabled = aiSearchState === 'searching';
+  btn.textContent = aiSearchState === 'searching' ? 'Running…' : 'Start AI Search';
+}
+
+function renderAiStatusPanel() {
+  const el = document.getElementById('ai-status-panel');
+  if (!el) return;
+  if (aiSearchState === 'idle') {
+    el.className = 'ai-status-panel hidden';
+    el.innerHTML = '';
+    return;
+  }
   if (aiSearchState === 'searching') {
-    btn.disabled = true;
-    btn.textContent = aiSearchRoundMessage || 'Running…';
-  } else {
-    btn.disabled = false;
-    btn.textContent = 'Start AI Search';
+    el.className = 'ai-status-panel running';
+    el.innerHTML = `
+      <div class="spinner"></div>
+      <div>
+        <div><strong>${escapeHtml(aiSearchRoundMessage || 'Running…')}</strong></div>
+        ${aiSearchDetailMessage ? `<div class="detail">${escapeHtml(aiSearchDetailMessage)}</div>` : ''}
+      </div>
+    `;
+    return;
+  }
+  if (aiSearchState === 'success') {
+    el.className = 'ai-status-panel success';
+    el.innerHTML = `
+      <span class="icon" style="color:var(--green)">✓</span>
+      <div>
+        <div><strong>${escapeHtml(aiSearchRoundMessage)}</strong></div>
+        ${aiSearchDetailMessage ? `<div class="detail">${escapeHtml(aiSearchDetailMessage)}</div>` : ''}
+      </div>
+    `;
+    return;
+  }
+  if (aiSearchState === 'error') {
+    el.className = 'ai-status-panel error';
+    el.innerHTML = `
+      <span class="icon" style="color:var(--red)">✕</span>
+      <div>
+        <div><strong>AI Search failed</strong></div>
+        ${aiSearchErrorMessage ? `<div class="detail">${escapeHtml(aiSearchErrorMessage)}</div>` : ''}
+      </div>
+    `;
   }
 }
 

@@ -345,6 +345,7 @@ td {
   border-radius: var(--radius);
   background: var(--bg-secondary);
   color: var(--text-primary);
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -411,6 +412,48 @@ td {
 .settings-advanced summary:hover { color: var(--text-primary); }
 .settings-advanced[open] summary { color: var(--text-primary); margin-bottom: 16px; }
 .settings-advanced-body { padding-left: 4px; }
+
+/* ── AI Search status panel ──
+   Lives below the two AI Search cards, above the results table.
+   Shows a spinner + stage text while running; flashes success/error
+   color when done. Fades out after a few seconds on success so it
+   doesn't stay permanently on screen. */
+.ai-status-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin: 16px 0 0 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  transition: opacity 0.25s ease, background 0.25s ease, border-color 0.25s ease;
+}
+.ai-status-panel.hidden { display: none; }
+.ai-status-panel.running {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--text-primary);
+}
+.ai-status-panel.success {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.45);
+  color: var(--text-primary);
+}
+.ai-status-panel.error {
+  background: rgba(239, 68, 68, 0.10);
+  border-color: rgba(239, 68, 68, 0.40);
+  color: var(--text-primary);
+}
+.ai-status-panel .spinner { width: 16px; height: 16px; border-width: 2px; }
+.ai-status-panel .icon {
+  width: 16px;
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  justify-content: center;
+}
+.ai-status-panel .detail { color: var(--text-secondary); font-size: 12px; }
 
 /* ── Job Search tier grid ── */
 .search-tier-grid {
