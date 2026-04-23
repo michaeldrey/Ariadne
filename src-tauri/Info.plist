@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Ariadne uses the microphone so you can answer interview-prep questions by voice. Audio stays local — transcribed by macOS and only the text is sent to the AI.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Ariadne transcribes your spoken interview answers so you can practice with voice instead of typing.</string>
+</dict>
+</plist>

@@ -34,10 +34,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "infoPlist": {
-        "NSMicrophoneUsageDescription": "Ariadne uses the microphone so you can answer interview-prep questions by voice. The audio stays local — it's transcribed by macOS and only the text is sent to the AI.",
-        "NSSpeechRecognitionUsageDescription": "Ariadne transcribes your spoken interview answers so you can practice with voice instead of typing."
-      }
+      "infoPlist": "Info.plist"
     }
   }
 }
