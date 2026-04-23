@@ -82,7 +82,7 @@ async function openScope(scope) {
     await loadConversations();
     if (currentConversations.length === 0) {
       // Auto-create a first thread so the user has something to send to.
-      const conv = await invoke('create_conversation', { scopeType: scope.type, roleId: scopeRoleId(scope), title: null });
+      const conv = await invoke('create_conversation', { scopeType: scopeType(scope), roleId: scopeRoleId(scope), title: null });
       currentConversations = [conv];
     }
     currentConversationId = currentConversations[0].id;
@@ -103,7 +103,10 @@ function scopeRoleId(scope) {
 }
 
 function scopeType(scope) {
-  return scope.type; // 'role' | 'profile' | 'interview'
+  // UI scope types are 'role' | 'profile' | 'interview'. The DB only knows
+  // 'role' | 'profile' — interview is a role-scoped chat with a different
+  // context, so it maps to 'role' at the invoke boundary.
+  return scope.type === 'interview' ? 'role' : scope.type;
 }
 
 async function loadConversations() {
