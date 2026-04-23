@@ -2,7 +2,8 @@ import {
   invoke, escapeHtml, formatDate, stageBadgeClass, fitScoreClass,
   toast, showModal, closeModal, navigate, renderMarkdown, isClaudeAgent,
 } from '../app.js';
-import { openChat, closeChat, openChatAndSend, openInterviewChat } from './chat.js';
+import { openChat, closeChat, openChatAndSend } from './chat.js';
+import { preselectRole as preselectInterviewRole } from './interview.js';
 
 const STAGES = ['Sourced', 'Applied', 'Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'];
 
@@ -800,9 +801,12 @@ function renderRoleHeader(role) {
   });
 
   document.getElementById('btn-interview')?.addEventListener('click', () => {
-    openInterviewChat(role, 'behavioral',
-      `Start a behavioral interview for the ${role.title} role at ${role.company}. Ask me one STAR-format question at a time. After I answer, give brief feedback and move to the next question. Focus on leadership, conflict resolution, ambiguity, and impact. Go.`
-    );
+    // Route to the Interview Prep view with this role preselected so the
+    // user can pick a mode (Behavioral / Technical / System Design / Full
+    // Loop) there, rather than dropping them straight into a behavioral
+    // session with no choice.
+    preselectInterviewRole(role.id);
+    navigate('#/interview');
   });
 
   document.getElementById('btn-delete-role').addEventListener('click', async () => {

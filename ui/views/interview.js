@@ -10,6 +10,13 @@ const MODES = [
 
 let selectedRoleId = null;
 
+/// Pre-select a role before navigating to the Interview Prep view. Used by
+/// the 'Practice Interview' button on the role detail page so clicking it
+/// drops the user on this page with their role already highlighted.
+export function preselectRole(roleId) {
+  selectedRoleId = roleId;
+}
+
 export async function renderInterview(container) {
   container.innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
 
