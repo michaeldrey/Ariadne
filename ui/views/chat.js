@@ -739,7 +739,9 @@ function startMic() {
   };
 
   recognition.onerror = (event) => {
-    if (event.error === 'no-speech') return; // benign — silence
+    // 'no-speech' = silence, 'aborted' = user stopped / onend about to fire.
+    // Both are benign — don't surface a toast for them.
+    if (event.error === 'no-speech' || event.error === 'aborted') return;
     stopMic();
     if (event.error === 'not-allowed') {
       toast('Microphone access denied. Check System Settings → Privacy & Security → Microphone.', 'error');

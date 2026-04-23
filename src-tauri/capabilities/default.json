@@ -9,8 +9,7 @@
     "core:event:allow-unlisten",
     "core:event:allow-emit",
     "core:event:allow-emit-to",
-    "shell:default",
-    "dialog:default",
+    "shell:allow-open",
     "notification:default",
     "core:window:allow-request-user-attention"
   ]
