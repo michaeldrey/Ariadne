@@ -1387,7 +1387,14 @@ thead th[data-sort-key] {
   50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0); }
 }
 
+/* Mic status is a floating pill that overlays the top of the input area
+   instead of reserving layout space. Prevents the chat drawer contents
+   from shifting up/down each time the user toggles the mic. */
 .mic-status {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: -36px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1395,14 +1402,21 @@ thead th[data-sort-key] {
   font-size: 13px;
   font-weight: 600;
   color: var(--red);
-  padding: 8px 12px;
-  margin: 4px 8px;
+  padding: 6px 14px;
   background: var(--red-dim);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .mic-status.hidden { display: none; }
+
+/* Parent of .mic-status needs to be a positioning context. The input area
+   already has padding; we just promote it to relative here. */
+.chat-input-area { position: relative; }
 
 .mic-dot {
   display: inline-block;
