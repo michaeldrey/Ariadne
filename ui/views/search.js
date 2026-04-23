@@ -116,14 +116,21 @@ export async function renderSearch(container) {
 
       <div class="card">
         <div class="card-header">
-          <h3>JobBot <span class="badge badge-strong">Premium</span></h3>
+          <h3>Paid API <span class="badge badge-strong">Premium</span></h3>
         </div>
-        <p class="text-muted text-sm mb-16">Curated feed from a paid search API. Configure your endpoint + API key in <a href="#/settings" style="color:var(--accent)">Settings → Integrations</a>, then run below.</p>
+        <p class="text-muted text-sm mb-8">Curated feed from a deterministic job-search API. Bypasses the LLM entirely — no hallucination risk, faster, and scales past the free tier's 10-per-run cap.</p>
+        <ul class="text-muted text-sm mb-16" style="margin:0 0 16px 18px;padding:0">
+          <li>Faster — seconds instead of minutes, no multi-round verification</li>
+          <li>More companies covered across ATSes</li>
+          <li>Tags and filters (remote, comp bands, stage, seniority)</li>
+          <li>More than ${AI_SEARCH_TARGET} jobs per run</li>
+          <li>Guaranteed-real URLs</li>
+        </ul>
         ${jobbotConfigured ? `
-          <button class="btn btn-primary" id="btn-jobbot-search">Run JobBot Search</button>
+          <button class="btn btn-primary" id="btn-jobbot-search">Run Paid Search</button>
         ` : `
-          <p class="text-muted text-sm mb-16">Status: not configured. Configure an endpoint + key in Settings, or skip — AI Search covers the free case.</p>
-          <a href="#/settings" class="btn btn-sm">Configure JobBot</a>
+          <p class="text-muted text-sm mb-16">Status: not configured. Add your endpoint + key in Settings, or stick with AI Search for the free path.</p>
+          <a href="#/settings" class="btn btn-sm">Configure API</a>
         `}
       </div>
     </div>
@@ -184,9 +191,9 @@ async function runAiSearch(container) {
       if (aiMatches.length >= startCount + AI_SEARCH_TARGET) break;
 
       aiSearchRound = round;
-      const need = Math.max(1, AI_SEARCH_TARGET - (aiMatches.length - startCount));
-      aiSearchRoundMessage = `Round ${round} of ${AI_SEARCH_MAX_ROUNDS} — searching for ${need} more…`;
-      aiSearchDetailMessage = `${aiMatches.length - startCount} verified so far this run.`;
+      const foundThisRun = aiMatches.length - startCount;
+      aiSearchRoundMessage = `Searching for jobs… ${foundThisRun}/${AI_SEARCH_TARGET} verified`;
+      aiSearchDetailMessage = `Pass ${round} of ${AI_SEARCH_MAX_ROUNDS}. Each URL is server-checked, then the agent re-opens it to confirm the listing.`;
       renderAiStatusPanel();
 
       const prompt = buildAiSearchPrompt(need, aiMatches);
@@ -208,7 +215,7 @@ async function runAiSearch(container) {
 
     const newCount = aiMatches.length - startCount;
     aiSearchState = 'success';
-    aiSearchRoundMessage = `Done — ${newCount} new verified match${newCount === 1 ? '' : 'es'} (${aiMatches.length} total).`;
+    aiSearchRoundMessage = `Done — found ${newCount} new job${newCount === 1 ? '' : 's'} (${aiMatches.length} total in the table).`;
     aiSearchDetailMessage = newCount === 0
       ? 'The agent couldn\'t verify any postings this run. Try adjusting your search criteria or re-running later.'
       : '';
@@ -250,18 +257,42 @@ async function fireAiSearchCompletionAlert({ failed, newCount }) {
   const focused = typeof document !== 'undefined' && document.hasFocus();
   const onSearchPage = location.hash === '#/search';
 
+  // Always try the native notification when app isn't focused — it's the
+  // primary 'come back' signal. Logging swallowed errors so we can diagnose
+  // why the dock wasn't bouncing.
   if (!focused) {
-    // User is in another app entirely — native notification + dock bounce.
     try {
       const { isPermissionGranted, requestPermission, sendNotification } = window.__TAURI__.notification;
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
       if (granted) sendNotification({ title, body });
-    } catch { /* optional */ }
+      else console.warn('[ai-search] notification permission not granted');
+    } catch (err) {
+      console.warn('[ai-search] notification failed:', err);
+    }
+    // Dock bounce (macOS) / taskbar flash (Windows) via requestUserAttention.
+    // In Tauri v2 the JS API lives in different namespaces depending on the
+    // build. Try each path and log which one worked.
     try {
-      const win = window.__TAURI__.window.getCurrentWindow();
-      await win.requestUserAttention(failed ? 'Critical' : 'Informational');
-    } catch { /* optional; requires capability */ }
+      const tauri = window.__TAURI__;
+      let win = null;
+      if (tauri?.window?.getCurrentWindow) {
+        win = tauri.window.getCurrentWindow();
+      } else if (tauri?.window?.getCurrent) {
+        win = tauri.window.getCurrent();
+      } else if (tauri?.webviewWindow?.getCurrentWebviewWindow) {
+        win = tauri.webviewWindow.getCurrentWebviewWindow();
+      }
+      if (win?.requestUserAttention) {
+        // Tauri 2 accepts 'Critical' | 'Informational' per UserAttentionType.
+        await win.requestUserAttention(failed ? 'Critical' : 'Informational');
+        console.log('[ai-search] requestUserAttention fired');
+      } else {
+        console.warn('[ai-search] requestUserAttention not available on window object:', win);
+      }
+    } catch (err) {
+      console.warn('[ai-search] requestUserAttention failed:', err);
+    }
   } else if (!onSearchPage) {
     // User is in the app but on a different page — toast is the right surface.
     toast(`${title}: ${body}`, failed ? 'error' : 'success');
