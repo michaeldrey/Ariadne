@@ -690,6 +690,15 @@ function startMic() {
   const micBtn = document.getElementById('chat-mic');
   const micStatus = document.getElementById('mic-status');
 
+  // WKWebView bug tracking. webkitSpeechRecognition on macOS WKWebView
+  // often aborts immediately after onaudiostart without ever delivering
+  // onresult — SFSpeechRecognizer isn't wired to the webview's audio
+  // pipeline. The onend handler auto-restarts, which creates a busy loop.
+  // Track consecutive 'no audio delivered' aborts and bail out of the
+  // loop after a few tries so we don't hammer the API.
+  let consecutiveBadAborts = 0;
+  let sawAnyResult = false;
+
   // Flip to active state IMMEDIATELY so the user sees feedback on click,
   // rather than waiting for recognition.start() to fire onstart (which can
   // take a moment, especially on the first use when macOS is priming the
@@ -732,6 +741,8 @@ function startMic() {
   recognition.onnomatch = () => console.log('[mic] onnomatch — audio heard but no transcript match');
 
   recognition.onresult = (event) => {
+    sawAnyResult = true;
+    consecutiveBadAborts = 0;
     let interim = '';
     finalTranscript = '';
     for (let i = 0; i < event.results.length; i++) {
@@ -756,6 +767,11 @@ function startMic() {
 
   recognition.onerror = (event) => {
     console.log('[mic] onerror — error=' + event.error);
+    // 'aborted' fired without any onresult means WKWebView's
+    // SFSpeechRecognizer never actually ingested audio. Count those.
+    if (event.error === 'aborted' && !sawAnyResult) {
+      consecutiveBadAborts += 1;
+    }
     // 'no-speech' = silence, 'aborted' = user stopped / onend about to fire.
     // Both are benign — don't surface a toast for them.
     if (event.error === 'no-speech' || event.error === 'aborted') return;
@@ -770,6 +786,19 @@ function startMic() {
   };
 
   recognition.onend = () => {
+    // If we've been aborting without ever transcribing anything, stop
+    // trying — webkitSpeechRecognition is non-functional in this WKWebView
+    // build. Surface a clear error so the user isn't staring at a pulsing
+    // dot that can't hear them. Threshold of 3 gives a real abort-retry
+    // pattern (e.g. brief mic glitch) a chance to recover.
+    if (micActive && !sawAnyResult && consecutiveBadAborts >= 3) {
+      stopMic();
+      toast(
+        'Voice transcription isn\'t working in this build (webkitSpeechRecognition aborts without ingesting audio). A proper recording + transcription path is on the roadmap; for now please type.',
+        'error',
+      );
+      return;
+    }
     if (micActive) {
       try { recognition.start(); } catch { stopMic(); }
     }
