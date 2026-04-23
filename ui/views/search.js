@@ -1,17 +1,26 @@
 import { invoke, escapeHtml, toast, isClaudeAgent } from '../app.js';
-import { openProfileChatAndSend } from './chat.js';
 
 let searchResults = null;
-let aiSearching = false;
 
-// Structured job matches the agent has reported via the report_job_matches
-// MCP tool. Module-scoped so renderSearch re-uses them after navigation,
-// and the jobs:matched listener can update them mid-flight.
+// AI Search target — how many verified matches to aim for per run, and the
+// cap on how many rounds we'll re-prompt to reach it. Will be user-tunable
+// in Settings later (tracked in backlog).
+const AI_SEARCH_TARGET = 10;
+const AI_SEARCH_MAX_ROUNDS = 3;
+
+// AI Search runtime state — module-scoped so the search keeps running if the
+// user navigates away, and so re-renders re-hydrate the banner/button.
+let aiSearchState = 'idle'; // 'idle' | 'searching' | 'done'
+let aiSearchRound = 0;
+let aiSearchRoundMessage = '';
+let jobSearchConversationId = null;
+
+// Structured job matches the agent has reported via commit_job_matches.
+// Accumulated across rounds within a single run (deduped by URL).
 let aiMatches = [];
 // Per-match state for the Set Up button (role creation + JD fetch +
-// analysis). Keyed by URL since that's the unique identifier we have.
-const settingUpByUrl = new Map(); // url -> 'setting-up' | 'done' | 'error'
-// Role IDs created by Set Up, so we can show a View button after success.
+// analysis). Keyed by URL.
+const settingUpByUrl = new Map();
 const createdRoleIdByUrl = new Map();
 
 let jobsMatchedUnlisten = null;
@@ -42,16 +51,21 @@ export async function renderSearch(container) {
   const jobbotConfigured = settings.search_backend === 'jobbot'
     && (settings.jobbot_endpoint || '').trim().length > 0;
 
-  // Subscribe to the agent reporting new matches. Single listener; drop any
-  // prior one so re-renders don't stack subscriptions.
+  // Subscribe to the agent reporting new matches. Merge into the running
+  // accumulator (dedup by URL) so multi-round runs grow the table instead
+  // of replacing it. Single listener; drop any prior one so re-renders
+  // don't stack subscriptions.
   if (jobsMatchedUnlisten) { try { jobsMatchedUnlisten(); } catch {} }
   const { listen } = window.__TAURI__.event;
   jobsMatchedUnlisten = await listen('jobs:matched', (e) => {
-    aiMatches = Array.isArray(e.payload) ? e.payload : [];
+    const incoming = Array.isArray(e.payload) ? e.payload : [];
+    const existing = new Set(aiMatches.map(m => m.url));
+    const novel = incoming.filter(m => m && m.url && !existing.has(m.url));
+    aiMatches = [...aiMatches, ...novel];
     renderAiResults(container);
-    toast(`Found ${aiMatches.length} matches`, 'success');
   });
 
+  const running = aiSearchState === 'searching';
   container.innerHTML = `
     <h2>Job Search</h2>
     <p class="text-muted text-sm mb-16">Two ways to find roles: AI search is always free; JobBot is a paid backend you plug in.</p>
@@ -61,16 +75,17 @@ export async function renderSearch(container) {
         <div class="card-header">
           <h3>AI Search <span class="badge badge-good">Free</span></h3>
         </div>
-        <p class="text-muted text-sm mb-16">Claude reads your Search Criteria from Profile and scans the web for matching roles. Results land in the table below — click Set Up to add a role, auto-fetch the JD, and run analysis.</p>
+        <p class="text-muted text-sm mb-8">Claude scans ATS-powered job boards (Greenhouse, Lever, Ashby) and direct company career pages for openings matching your <a href="#/profile" style="color:var(--accent)">search criteria</a>. Each URL is triple-verified — server liveness check, content-looks-like-a-job-posting check, and the agent re-opens the page to confirm the title + company match — to keep hallucinated listings out of the table.</p>
+        <p class="text-muted text-sm mb-16"><strong>Expect 1–5 minutes per run.</strong> Aims for up to ${AI_SEARCH_TARGET} verified matches across up to ${AI_SEARCH_MAX_ROUNDS} passes. Returns fewer if that's all the agent can verify — quality over quantity. Runs in the background; feel free to keep using the app.</p>
         <div class="text-sm mb-16">
-          <div class="text-muted">Uses:</div>
+          <div class="text-muted">Prereqs:</div>
           <ul style="margin:4px 0 0 18px;padding:0">
             <li>Your <a href="#/profile" style="color:var(--accent)">search criteria</a> ${hasCriteria ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— not set yet</span>'}</li>
             <li>${escapeHtml(authLabel)} ${hasAuth ? '<span style="color:var(--green)">✓</span>' : '<span style="color:var(--yellow)">— set an API key or install the Claude CLI</span>'}</li>
           </ul>
         </div>
-        <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasAuth) ? 'disabled' : ''}>
-          ${aiSearching ? 'Searching…' : 'Start AI Search'}
+        <button class="btn btn-primary" id="btn-ai-search" ${(!hasCriteria || !hasAuth) || running ? 'disabled' : ''}>
+          ${running ? escapeHtml(aiSearchRoundMessage || 'Running…') : 'Start AI Search'}
         </button>
         ${(!hasCriteria || !hasAuth) ? `
           <p class="text-muted text-sm mt-8">Fill in missing pieces above to enable.</p>
@@ -99,55 +114,7 @@ export async function renderSearch(container) {
 
   renderAiResults(container);
 
-  document.getElementById('btn-ai-search')?.addEventListener('click', async () => {
-    aiSearching = true;
-    const btn = document.getElementById('btn-ai-search');
-    btn.disabled = true;
-    btn.textContent = 'Searching…';
-    // Explicit tool usage + URL verification — without it, agents will
-    // happily invent plausible-looking URLs that 404. The MCP tool call
-    // at the end is what populates the Job Search table.
-    const prompt = `Find real, currently-open job postings matching my search criteria (you already have it in context). The UI table is populated through a TWO-STAGE verification process — do not skip either stage.
-
-## Process
-
-### Stage 0: Discovery
-Use WebSearch with ATS-domain queries, e.g.:
-- \`site:boards.greenhouse.io <role keywords>\`
-- \`site:jobs.lever.co <role keywords>\`
-- \`site:jobs.ashbyhq.com <role keywords>\`
-- Direct company career pages if specific companies are in my criteria.
-Skip LinkedIn (login walls), Indeed (auth required), anything over 60 days old.
-
-### Stage 1: Stage for verification
-Call \`report_job_matches\` with your candidate list. The server will:
-- Run a live GET on each URL
-- Drop URLs that 404, return login walls, lack job-posting keywords, or are too small
-The tool result tells you which URLs passed.
-
-### Stage 2: You verify content matches — CRITICAL
-For each URL that passed stage 1, use WebFetch to open the page, then confirm:
-- The visible role title on the page matches what you claimed
-- The company on the page matches what you claimed
-- The role actually fits my criteria (don't stretch)
-
-This catches cases where stage 1 accepts a URL that loads and looks like a posting, but the actual posting is for a different company or role than the agent claimed (hallucination).
-
-### Stage 3: Commit
-Call \`commit_job_matches\` with ONLY the fully-verified subset. If nothing verifies, call it with an empty list — that's the correct answer. Never pad with unverified guesses.
-
-## Rules
-- NEVER invent URLs. Every URL must come from a real WebSearch result.
-- Accuracy over quantity. Zero verified matches > five speculative ones.
-- After commit, write a 1-2 sentence summary in chat (don't repeat the list — the table shows it). Mention any caveats like "only 2 verified because most candidates didn't match company on the page."`;
-    try {
-      await openProfileChatAndSend(prompt, 'jobsearch');
-    } catch (err) {
-      toast(err.toString(), 'error');
-    } finally {
-      aiSearching = false;
-    }
-  });
+  document.getElementById('btn-ai-search')?.addEventListener('click', () => runAiSearch(container));
 
   document.getElementById('btn-jobbot-search')?.addEventListener('click', async () => {
     const resultsDiv = document.getElementById('search-results');
@@ -162,6 +129,126 @@ Call \`commit_job_matches\` with ONLY the fully-verified subset. If nothing veri
   });
 
   if (searchResults) wireJobBotResults(container);
+}
+
+// ── AI Search background runner ──
+
+// Runs the search in the background (no chat drawer). Multi-round: if the
+// first pass returns fewer than AI_SEARCH_TARGET verified matches, we loop
+// up to AI_SEARCH_MAX_ROUNDS asking the agent for different postings than
+// it already found. The button itself reflects the current stage/round.
+async function runAiSearch(container) {
+  if (aiSearchState === 'searching') return;
+  aiSearchState = 'searching';
+  aiMatches = [];           // fresh run — reset accumulator
+  aiSearchRound = 0;
+  aiSearchRoundMessage = 'Starting…';
+  settingUpByUrl.clear();
+  createdRoleIdByUrl.clear();
+  renderAiResults(container);
+  updateAiSearchButton(container);
+
+  try {
+    const convId = await ensureJobSearchConversation();
+    for (let round = 1; round <= AI_SEARCH_MAX_ROUNDS; round++) {
+      if (aiMatches.length >= AI_SEARCH_TARGET) break;
+
+      aiSearchRound = round;
+      const need = Math.max(1, AI_SEARCH_TARGET - aiMatches.length);
+      aiSearchRoundMessage = `Round ${round}/${AI_SEARCH_MAX_ROUNDS} — searching for ${need} more…`;
+      updateAiSearchButton(container);
+
+      const prompt = buildAiSearchPrompt(need, aiMatches);
+      try {
+        await invoke('send_to_conversation_acp', {
+          conversationId: convId,
+          userText: prompt,
+        });
+      } catch (err) {
+        toast(`AI Search round ${round} failed: ${err}`, 'error');
+        break;
+      }
+    }
+
+    aiSearchState = 'done';
+    aiSearchRoundMessage = '';
+    updateAiSearchButton(container);
+    try {
+      const { isPermissionGranted, requestPermission, sendNotification } = window.__TAURI__.notification;
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === 'granted';
+      if (granted) {
+        sendNotification({
+          title: 'Ariadne: AI Search done',
+          body: `${aiMatches.length} verified match${aiMatches.length === 1 ? '' : 'es'} ready to review.`,
+        });
+      }
+    } catch { /* notifications optional */ }
+    toast(`AI Search done — ${aiMatches.length} verified match${aiMatches.length === 1 ? '' : 'es'}`,
+      aiMatches.length > 0 ? 'success' : 'info');
+  } catch (err) {
+    aiSearchState = 'done';
+    aiSearchRoundMessage = '';
+    updateAiSearchButton(container);
+    toast(err.toString(), 'error');
+  }
+}
+
+function updateAiSearchButton(container) {
+  const btn = document.getElementById('btn-ai-search');
+  if (!btn) return;
+  if (aiSearchState === 'searching') {
+    btn.disabled = true;
+    btn.textContent = aiSearchRoundMessage || 'Running…';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Start AI Search';
+  }
+}
+
+async function ensureJobSearchConversation() {
+  if (jobSearchConversationId) return jobSearchConversationId;
+  const conv = await invoke('create_conversation', {
+    scopeType: 'profile',
+    roleId: null,
+    title: 'Job Search',
+  });
+  jobSearchConversationId = conv.id;
+  return conv.id;
+}
+
+function buildAiSearchPrompt(need, already) {
+  const existingList = already.length > 0
+    ? `\n\n## URLs you've already verified this run (do NOT return these again, find DIFFERENT ones):\n${already.map(m => `- ${m.url}  (${m.company} — ${m.title})`).join('\n')}`
+    : '';
+  return `Find up to ${need} real, currently-open job postings matching my search criteria (you already have it in context). Use the two-stage verification flow — don't skip either stage.
+
+## Process
+
+### Stage 0: Discovery
+Use WebSearch with ATS-domain queries:
+- \`site:boards.greenhouse.io <role keywords>\`
+- \`site:jobs.lever.co <role keywords>\`
+- \`site:jobs.ashbyhq.com <role keywords>\`
+- Direct company career pages for target companies in my criteria.
+Skip LinkedIn (login walls), Indeed (auth), anything >60 days old.
+
+### Stage 1: Stage for server verification
+Call \`report_job_matches\` with your candidate list. The server checks liveness + content. The tool result lists which URLs passed.
+
+### Stage 2: Verify content matches (CRITICAL)
+For each URL that passed stage 1, WebFetch the page and confirm:
+- The on-page role title matches what you claimed
+- The on-page company matches what you claimed
+- The role actually fits my criteria
+
+### Stage 3: Commit
+Call \`commit_job_matches\` with ONLY the fully-verified subset. Empty list is acceptable — never pad with unverified guesses.
+
+## Rules
+- Accuracy over quantity. ${need === 0 ? '' : `Up to ${need} verified matches this round.`}
+- NEVER invent URLs.
+- After commit, one-sentence summary in chat.${existingList}`;
 }
 
 // ── AI Search results table ──
