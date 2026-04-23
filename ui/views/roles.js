@@ -21,7 +21,9 @@ const CONTENT_FIELDS = [
 ];
 
 // Per-view sort state.
-let listSort = { key: 'updated_date', dir: 'desc' };
+// Default sort: most advanced pipeline stage first (Negotiating → Sourced).
+// Matches how users think about the list — "what's closest to an offer?"
+let listSort = { key: 'stage', dir: 'desc' };
 let activeTab = 'active';
 
 function renderFitScoreCell(score) {
