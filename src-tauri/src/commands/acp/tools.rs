@@ -429,7 +429,7 @@ impl AriadneTools {
         )]))
     }
 
-    #[tool(description = "Report job matches found during web search. Populates the Job Search results table in the UI with a row per match. Pass ALL matches in a single call (don't call incrementally). Each URL is server-verified with a live GET — any URL that doesn't load is DROPPED before reaching the UI, and a list of dropped URLs is returned so you know which matches were rejected. Profile-scoped chats only.")]
+    #[tool(description = "STAGE 1 of 2: Stage job matches for verification. Does NOT populate the UI yet. Each URL goes through a server liveness+content check. The result tells you which URLs passed and which were rejected. For each URL that passed, you MUST then WebFetch it yourself, confirm the page heading matches the company + role title you claimed, and then call `commit_job_matches` with only the fully-verified subset. If you skip commit_job_matches, the user's Job Search table stays empty. Profile-scoped chats only.")]
     async fn report_job_matches(
         &self,
         Parameters(p): Parameters<ReportJobMatchesParams>,
@@ -437,36 +437,76 @@ impl AriadneTools {
         self.require_profile()?;
         let submitted = p.matches.len();
 
-        // Parallel URL verification. Anything that doesn't respond with 2xx
-        // within the timeout is dropped — covers hallucinated URLs and
-        // stale/removed postings. The agent gets a list of rejections in
-        // the tool result so it can retry or report the gap.
+        // Parallel URL verification: liveness + content-looks-like-job-posting.
         let checks = p.matches.iter().map(|m| async move {
             let ok = url_looks_like_job_posting(&m.url).await;
             (ok, m.clone())
         });
         let results = join_all(checks).await;
-        let mut verified = Vec::new();
+        let mut passed = Vec::new();
         let mut rejected = Vec::new();
         for (ok, m) in results {
-            if ok { verified.push(m); } else { rejected.push(m); }
+            if ok { passed.push(m); } else { rejected.push(m); }
         }
 
-        let count = verified.len();
-        let payload = serde_json::to_value(&verified)
+        let mut msg = format!(
+            "Stage 1 done. {} of {} URLs passed server checks (loaded + looked like a job posting).\n\n",
+            passed.len(), submitted,
+        );
+        if !passed.is_empty() {
+            msg.push_str("NEXT STEPS — DO NOT SKIP:\n");
+            msg.push_str("1. For EACH passed URL below, use WebFetch to open the page.\n");
+            msg.push_str("2. Confirm the page's role title and company name actually match the match you staged (e.g. a Stripe URL that served a Datadog posting would fail this check).\n");
+            msg.push_str("3. Call the `commit_job_matches` tool with ONLY the subset you fully verified. If nothing matches, call commit_job_matches with an empty list — the user will see zero results, which is better than a wrong listing.\n\n");
+            msg.push_str("Passed URLs to verify:\n");
+            for m in &passed {
+                msg.push_str(&format!("- {} — {} ({})\n", m.company, m.title, m.url));
+            }
+        } else {
+            msg.push_str("No URLs passed server checks. Call commit_job_matches with an empty list so the user sees an empty state, then explain in chat that your queries didn't find verifiable matches.\n");
+        }
+        if !rejected.is_empty() {
+            msg.push_str("\nRejected in stage 1 (failed load or lacked job-posting keywords):\n");
+            for r in &rejected {
+                msg.push_str(&format!("- {} ({} — {})\n", r.url, r.company, r.title));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+
+    #[tool(description = "STAGE 2 of 2: Commit fully-verified job matches to the UI. Only call this AFTER you've run report_job_matches, AND WebFetched each URL that passed stage 1, AND confirmed on-page that the role title + company match. Populates the Job Search results table in the UI. Pass an empty list if nothing verified cleanly — the user will see zero matches, which is the correct outcome. Profile-scoped chats only.")]
+    async fn commit_job_matches(
+        &self,
+        Parameters(p): Parameters<ReportJobMatchesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_profile()?;
+        // Belt-and-suspenders: re-run the server check in case the agent is
+        // sending URLs that never went through stage 1.
+        let checks = p.matches.iter().map(|m| async move {
+            let ok = url_looks_like_job_posting(&m.url).await;
+            (ok, m.clone())
+        });
+        let results = join_all(checks).await;
+        let (final_matches, redropped): (Vec<_>, Vec<_>) = results
+            .into_iter()
+            .partition(|(ok, _)| *ok);
+        let final_matches: Vec<JobMatch> = final_matches.into_iter().map(|(_, m)| m).collect();
+        let redropped: Vec<JobMatch> = redropped.into_iter().map(|(_, m)| m).collect();
+
+        let count = final_matches.len();
+        let payload = serde_json::to_value(&final_matches)
             .unwrap_or_else(|_| serde_json::json!([]));
         let _ = self.app.emit("jobs:matched", payload);
 
         let mut msg = format!(
-            "Reported {} verified match{} (of {} submitted) to the UI.",
-            count, if count == 1 { "" } else { "es" }, submitted,
+            "Committed {} match{} to the Job Search UI.",
+            count, if count == 1 { "" } else { "es" },
         );
-        if !rejected.is_empty() {
-            msg.push_str("\n\nRejected URLs (failed live-job-posting check — didn't load, too small, had 'not found' signals, or lacked keywords like 'Responsibilities'/'Qualifications'):\n");
-            for r in &rejected {
+        if !redropped.is_empty() {
+            msg.push_str("\n\nDropped at commit time (these URLs didn't re-verify — you may have skipped the stage-2 WebFetch step):\n");
+            for r in &redropped {
                 msg.push_str(&format!("- {} ({} — {})\n", r.url, r.company, r.title));
             }
-            msg.push_str("\nDon't retry the same URL. Use WebSearch with different ATS-domain queries and WebFetch each new candidate BEFORE including it. If you can only confirm a few postings, return those few — accuracy over quantity.");
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }

@@ -107,30 +107,39 @@ export async function renderSearch(container) {
     // Explicit tool usage + URL verification — without it, agents will
     // happily invent plausible-looking URLs that 404. The MCP tool call
     // at the end is what populates the Job Search table.
-    const prompt = `Find real, currently-open job postings matching my search criteria (you already have it in context).
+    const prompt = `Find real, currently-open job postings matching my search criteria (you already have it in context). The UI table is populated through a TWO-STAGE verification process — do not skip either stage.
 
-## Process (follow this — don't guess)
-1. Use the WebSearch tool to find candidate postings. Query specific ATS domains that return real links, e.g.:
-   - \`site:boards.greenhouse.io <role keywords> <company keyword or level>\`
-   - \`site:jobs.lever.co <role keywords>\`
-   - \`site:jobs.ashbyhq.com <role keywords>\`
-   - Plus direct company career pages when a target company is in my criteria.
-2. For EACH candidate URL, use the WebFetch tool to open the page and verify:
-   - It loads (not 404, not a login wall, not a search page)
-   - It IS a job posting (not a blog, not a generic careers page)
-   - The role actually matches my criteria (don't stretch)
-   - Extract title, company, location, remote status, salary if posted, posted date if visible
-3. Only include verified postings. If you can only verify 3, return 3 — don't pad with unverified ones.
+## Process
+
+### Stage 0: Discovery
+Use WebSearch with ATS-domain queries, e.g.:
+- \`site:boards.greenhouse.io <role keywords>\`
+- \`site:jobs.lever.co <role keywords>\`
+- \`site:jobs.ashbyhq.com <role keywords>\`
+- Direct company career pages if specific companies are in my criteria.
+Skip LinkedIn (login walls), Indeed (auth required), anything over 60 days old.
+
+### Stage 1: Stage for verification
+Call \`report_job_matches\` with your candidate list. The server will:
+- Run a live GET on each URL
+- Drop URLs that 404, return login walls, lack job-posting keywords, or are too small
+The tool result tells you which URLs passed.
+
+### Stage 2: You verify content matches — CRITICAL
+For each URL that passed stage 1, use WebFetch to open the page, then confirm:
+- The visible role title on the page matches what you claimed
+- The company on the page matches what you claimed
+- The role actually fits my criteria (don't stretch)
+
+This catches cases where stage 1 accepts a URL that loads and looks like a posting, but the actual posting is for a different company or role than the agent claimed (hallucination).
+
+### Stage 3: Commit
+Call \`commit_job_matches\` with ONLY the fully-verified subset. If nothing verifies, call it with an empty list — that's the correct answer. Never pad with unverified guesses.
 
 ## Rules
-- DO NOT invent URLs. Every URL you report must come from a real WebFetch that returned a valid job page.
-- Skip LinkedIn (URLs return login walls), Indeed (requires auth), and anything more than 60 days old.
-- If WebSearch is giving you weak results, try different queries before giving up.
-
-## Output
-Call the \`report_job_matches\` tool exactly once, with ALL verified matches in the single call. Fields: title, company, url, location, remote (bool), salary, posted_date (YYYY-MM-DD), reason (one sentence).
-
-Then in chat, write a 1-2 sentence summary of what you found and any notable caveats (e.g. "only found 3 verifiable matches because queries returned mostly aggregator URLs"). Don't repeat the list — the table shows it.`;
+- NEVER invent URLs. Every URL must come from a real WebSearch result.
+- Accuracy over quantity. Zero verified matches > five speculative ones.
+- After commit, write a 1-2 sentence summary in chat (don't repeat the list — the table shows it). Mention any caveats like "only 2 verified because most candidates didn't match company on the page."`;
     try {
       await openProfileChatAndSend(prompt, 'jobsearch');
     } catch (err) {
