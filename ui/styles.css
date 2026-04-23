@@ -1,6 +1,12 @@
 /* ── Reset & Base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Default <button> text color inherits from its container instead of the OS
+   default ('buttontext'), which renders near-black on our dark theme. Any
+   bespoke button class built on top of <button> then has to remember to
+   set color explicitly. This catches that whole class of regressions. */
+button { color: inherit; }
+
 :root {
   --bg-primary: #0f1117;
   --bg-secondary: #1a1d27;
@@ -1309,6 +1315,7 @@ thead th[data-sort-key] {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
+  color: var(--text-primary);
   cursor: pointer;
   transition: all var(--transition);
   text-align: left;
