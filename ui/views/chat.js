@@ -686,25 +686,32 @@ function startMic() {
     return;
   }
 
+  const input = document.getElementById('chat-input');
+  const micBtn = document.getElementById('chat-mic');
+  const micStatus = document.getElementById('mic-status');
+
+  // Flip to active state IMMEDIATELY so the user sees feedback on click,
+  // rather than waiting for recognition.start() to fire onstart (which can
+  // take a moment, especially on the first use when macOS is priming the
+  // speech recognition subsystem).
+  micActive = true;
+  if (micBtn) micBtn.classList.add('mic-active');
+  if (micStatus) {
+    micStatus.innerHTML = '<span class="mic-dot"></span> Starting microphone…';
+    micStatus.classList.remove('hidden');
+  }
+
   recognition = new SpeechRecognition();
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
-  const input = document.getElementById('chat-input');
-  const micBtn = document.getElementById('chat-mic');
-  const micStatus = document.getElementById('mic-status');
-
-  // Store the text that was in the input before we started, so we append to it
   const baseText = input?.value || '';
   let finalTranscript = '';
 
   recognition.onstart = () => {
-    micActive = true;
-    if (micBtn) micBtn.classList.add('mic-active');
     if (micStatus) {
-      micStatus.textContent = 'Listening…';
-      micStatus.classList.remove('hidden');
+      micStatus.innerHTML = '<span class="mic-dot"></span> Listening — speak now';
     }
   };
 
@@ -719,25 +726,31 @@ function startMic() {
         interim += result[0].transcript;
       }
     }
+    const combined = finalTranscript + interim;
     if (input) {
-      input.value = baseText + (baseText ? ' ' : '') + finalTranscript + interim;
+      input.value = baseText + (baseText ? ' ' : '') + combined;
       autoGrow(input);
+    }
+    if (micStatus) {
+      // Live word count gives visible proof the pipeline is receiving audio.
+      const words = combined.trim().split(/\s+/).filter(Boolean).length;
+      micStatus.innerHTML = `<span class="mic-dot"></span> Listening — ${words} word${words === 1 ? '' : 's'} captured`;
     }
   };
 
   recognition.onerror = (event) => {
-    if (event.error === 'no-speech') {
-      // Benign — just means silence. Let it keep listening.
-      return;
-    }
+    if (event.error === 'no-speech') return; // benign — silence
     stopMic();
     if (event.error === 'not-allowed') {
-      toast('Microphone access denied. Check your system preferences.', 'error');
+      toast('Microphone access denied. Check System Settings → Privacy & Security → Microphone.', 'error');
+    } else if (event.error === 'service-not-allowed') {
+      toast('Speech recognition service not allowed. Check System Settings → Privacy & Security → Speech Recognition.', 'error');
+    } else {
+      toast(`Speech recognition error: ${event.error}`, 'error');
     }
   };
 
   recognition.onend = () => {
-    // If we're still supposed to be active, restart (continuous mode can stop on silence)
     if (micActive) {
       try { recognition.start(); } catch { stopMic(); }
     }
@@ -746,6 +759,7 @@ function startMic() {
   try {
     recognition.start();
   } catch (err) {
+    stopMic();
     toast('Could not start speech recognition: ' + err.message, 'error');
   }
 }

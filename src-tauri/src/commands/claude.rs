@@ -92,20 +92,15 @@ async fn call_anthropic_api(
 }
 
 async fn call_claude_cli(prompt: String, tier: ModelTier) -> Result<String, String> {
-    // Resolve absolute path — Tauri apps have a minimal PATH so `claude`
-    // may not resolve by name even if it's installed.
-    let which = Command::new("which")
-        .arg("claude")
-        .output()
+    // Resolve absolute path — bundled macOS apps have a minimal PATH so
+    // `claude` isn't findable via a naive PATH lookup. The resolver falls
+    // back to Homebrew / npm-global / Volta prefixes.
+    let path = crate::commands::acp::install::resolve_cli("claude")
         .await
-        .map_err(|e| format!("which claude: {}", e))?;
-    if !which.status.success() {
-        return Err(
+        .ok_or_else(|| {
             "No API key configured and the Claude Code CLI (`claude`) isn't on PATH. Set an API key in Settings or install the Claude Code CLI."
-                .to_string(),
-        );
-    }
-    let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+                .to_string()
+        })?;
 
     let model_alias = match tier {
         ModelTier::Fast => "haiku",

@@ -22,7 +22,6 @@ use agent_client_protocol::{
     },
 };
 use agent_client_protocol_tokio::AcpAgent;
-use std::str::FromStr;
 use rusqlite::params;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -114,25 +113,60 @@ impl AcpRuntime {
         let (acp_agent_choice, acp_custom_command) = read_acp_agent_choice(&db);
         eprintln!("[acp] agent: {}", acp_agent_choice);
 
+        // Bundled macOS apps launch with a stripped PATH, so node/npm/npx
+        // and the various vendor CLIs aren't findable. Prepend the extended
+        // PATH as the first from_args arg (AcpAgent parses leading
+        // NAME=value tokens as env vars) for EVERY branch, including the
+        // built-in Gemini/Codex helpers which we now hand-roll so we can
+        // inject env vars into them too.
+        let extended = super::install::extended_path();
+        // Resolve npx explicitly for the vendor branches so `npx` works
+        // even if the app's PATH doesn't include Homebrew / Volta.
+        let npx_path = super::install::resolve_cli("npx").await
+            .unwrap_or_else(|| "npx".to_string());
+
         let agent = match acp_agent_choice.as_str() {
-            "gemini" => AcpAgent::google_gemini(),
-            "codex" => AcpAgent::zed_codex(),
+            "gemini" => {
+                let args: Vec<String> = vec![
+                    format!("PATH={}", extended),
+                    npx_path.clone(),
+                    "-y".to_string(),
+                    "--".to_string(),
+                    "@google/gemini-cli@latest".to_string(),
+                    "--experimental-acp".to_string(),
+                ];
+                AcpAgent::from_args(args).map_err(|e| format!("building gemini agent: {}", e))?
+            }
+            "codex" => {
+                let args: Vec<String> = vec![
+                    format!("PATH={}", extended),
+                    npx_path.clone(),
+                    "-y".to_string(),
+                    "@zed-industries/codex-acp@latest".to_string(),
+                ];
+                AcpAgent::from_args(args).map_err(|e| format!("building codex agent: {}", e))?
+            }
             "custom" => {
                 let cmd = acp_custom_command
                     .as_deref()
                     .filter(|s| !s.trim().is_empty())
                     .ok_or("ACP Agent set to 'custom' but no command is configured. Set one in Settings → AI & Backends.")?;
-                AcpAgent::from_str(cmd)
-                    .map_err(|e| format!("parsing custom ACP command: {}", e))?
+                // Parse the user command with shell-words, then splice the
+                // PATH env var to the front so it's available to the agent.
+                let parsed = shell_words::split(cmd)
+                    .map_err(|e| format!("parsing custom ACP command: {}", e))?;
+                let mut args: Vec<String> = vec![format!("PATH={}", extended)];
+                args.extend(parsed);
+                AcpAgent::from_args(args)
+                    .map_err(|e| format!("building custom ACP agent: {}", e))?
             }
             _ => {
                 // Default: Claude. This is the only branch that benefits from
                 // (a) forwarding ANTHROPIC_API_KEY for pay-per-token, (b) the
-                // globally-installed binary short-circuit. Gemini/Codex ship
-                // their own CLIs and will pay the npx cost on cold starts.
+                // globally-installed binary short-circuit.
                 let auth_mode = if api_key.is_some() { "API key" } else { "Claude Pro/Max subscription" };
                 eprintln!("[acp] claude auth: {}", auth_mode);
-                let mut args: Vec<String> = vec![];
+                let mut args: Vec<String> = vec![format!("PATH={}", extended)];
                 if let Some(key) = &api_key {
                     args.push(format!("ANTHROPIC_API_KEY={}", key));
                 }
@@ -147,7 +181,7 @@ impl AcpRuntime {
                     }
                     _ => {
                         eprintln!("[acp] claude-code-acp not installed globally — falling back to npx (slower cold starts)");
-                        args.push("npx".to_string());
+                        args.push(npx_path.clone());
                         args.push("-y".to_string());
                         args.push("@zed-industries/claude-code-acp@latest".to_string());
                     }

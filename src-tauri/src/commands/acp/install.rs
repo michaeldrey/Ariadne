@@ -6,10 +6,73 @@
 //! that entirely.
 
 use serde::Serialize;
+use std::path::PathBuf;
 use tokio::process::Command;
 
 const PKG: &str = "@zed-industries/claude-code-acp";
 const BIN: &str = "claude-code-acp";
+
+/// Resolve a CLI binary by name. Bundled macOS apps (.app) launch with a
+/// stripped PATH (often just /usr/bin:/bin), so tools installed in the
+/// user's normal Homebrew / npm-global locations aren't found by a plain
+/// \`which\`. Tries common install prefixes explicitly as a fallback.
+pub(crate) async fn resolve_cli(name: &str) -> Option<String> {
+    // First: augmented PATH so `which` can find things in the usual places.
+    let augmented = extended_path();
+    if let Ok(output) = Command::new("/usr/bin/which")
+        .arg(name)
+        .env("PATH", &augmented)
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !p.is_empty() { return Some(p); }
+        }
+    }
+    // Fallback: probe the usual install prefixes directly.
+    for prefix in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        let candidate = PathBuf::from(prefix).join(name);
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().into_owned());
+        }
+    }
+    // Also check npm-global under $HOME.
+    if let Ok(home) = std::env::var("HOME") {
+        for rel in [".npm-global/bin", ".volta/bin"] {
+            let candidate = PathBuf::from(&home).join(rel).join(name);
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// PATH to use when shelling out from a bundled app. Includes Homebrew (ARM
+/// and Intel), /usr/local/bin, /usr/bin, /bin, and the user's npm-global +
+/// Volta bins under $HOME. Safe to pass as env PATH for subprocess spawns.
+pub(crate) fn extended_path() -> String {
+    let mut parts = vec![
+        "/opt/homebrew/bin".to_string(),
+        "/opt/homebrew/sbin".to_string(),
+        "/usr/local/bin".to_string(),
+        "/usr/local/sbin".to_string(),
+        "/usr/bin".to_string(),
+        "/bin".to_string(),
+        "/usr/sbin".to_string(),
+        "/sbin".to_string(),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        parts.push(format!("{}/.npm-global/bin", home));
+        parts.push(format!("{}/.volta/bin", home));
+        parts.push(format!("{}/.local/bin", home));
+    }
+    if let Ok(existing) = std::env::var("PATH") {
+        parts.push(existing);
+    }
+    parts.join(":")
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallStatus {
@@ -27,20 +90,10 @@ pub struct InstallStatus {
 
 #[tauri::command]
 pub async fn detect_acp_install() -> Result<InstallStatus, String> {
-    let npm_available = Command::new("npm")
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let npm_available = resolve_cli("npm").await.is_some();
+    let path = resolve_cli(BIN).await;
 
-    let which = Command::new("which")
-        .arg(BIN)
-        .output()
-        .await
-        .map_err(|e| format!("which: {}", e))?;
-
-    if !which.status.success() {
+    if path.is_none() {
         return Ok(InstallStatus {
             installed: false,
             path: None,
@@ -48,11 +101,11 @@ pub async fn detect_acp_install() -> Result<InstallStatus, String> {
             npm_available,
         });
     }
-
-    let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+    let path = path.unwrap();
 
     let version = Command::new(&path)
         .arg("--version")
+        .env("PATH", extended_path())
         .output()
         .await
         .ok()
@@ -60,8 +113,8 @@ pub async fn detect_acp_install() -> Result<InstallStatus, String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
 
     Ok(InstallStatus {
-        installed: !path.is_empty(),
-        path: if path.is_empty() { None } else { Some(path) },
+        installed: true,
+        path: Some(path),
         version,
         npm_available,
     })
@@ -73,33 +126,27 @@ pub async fn detect_acp_install() -> Result<InstallStatus, String> {
 /// Rust. If the subprocess spawn later fails, the error bubbles up clearly.
 #[tauri::command]
 pub async fn detect_claude_cli() -> Result<InstallStatus, String> {
-    let which = Command::new("which")
-        .arg("claude")
-        .output()
-        .await
-        .map_err(|e| format!("which: {}", e))?;
-
-    if !which.status.success() {
+    let path = resolve_cli("claude").await;
+    if path.is_none() {
         return Ok(InstallStatus {
             installed: false,
             path: None,
             version: None,
-            npm_available: true, // irrelevant for this check
+            npm_available: true,
         });
     }
-
-    let path = String::from_utf8_lossy(&which.stdout).trim().to_string();
+    let path = path.unwrap();
     let version = Command::new(&path)
         .arg("--version")
+        .env("PATH", extended_path())
         .output()
         .await
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
-
     Ok(InstallStatus {
-        installed: !path.is_empty(),
-        path: if path.is_empty() { None } else { Some(path) },
+        installed: true,
+        path: Some(path),
         version,
         npm_available: true,
     })
@@ -109,8 +156,12 @@ pub async fn detect_claude_cli() -> Result<InstallStatus, String> {
 /// stdout+stderr on success so the UI can display the install log.
 #[tauri::command]
 pub async fn install_acp() -> Result<String, String> {
-    let output = Command::new("npm")
+    let npm = resolve_cli("npm")
+        .await
+        .ok_or_else(|| "npm isn't on PATH. Install Node.js and try again.".to_string())?;
+    let output = Command::new(&npm)
         .args(["install", "-g", PKG])
+        .env("PATH", extended_path())
         .output()
         .await
         .map_err(|e| format!("spawning npm: {}", e))?;
