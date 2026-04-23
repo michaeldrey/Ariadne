@@ -169,6 +169,9 @@ function renderAiResults(container) {
       <div class="card-header">
         <h3>AI Search Results (${aiMatches.length})</h3>
       </div>
+      <p class="text-muted text-sm mb-8" style="padding:0 16px">
+        ⚠ LLM-generated list. Each URL is server-verified to load and look like a job posting, but verify the role still matches the description before applying.
+      </p>
       <div class="table-container">
         <table class="ai-search-table">
           <colgroup>

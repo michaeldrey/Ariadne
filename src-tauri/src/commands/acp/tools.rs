@@ -442,7 +442,7 @@ impl AriadneTools {
         // stale/removed postings. The agent gets a list of rejections in
         // the tool result so it can retry or report the gap.
         let checks = p.matches.iter().map(|m| async move {
-            let ok = url_is_live(&m.url).await;
+            let ok = url_looks_like_job_posting(&m.url).await;
             (ok, m.clone())
         });
         let results = join_all(checks).await;
@@ -462,32 +462,78 @@ impl AriadneTools {
             count, if count == 1 { "" } else { "es" }, submitted,
         );
         if !rejected.is_empty() {
-            msg.push_str("\n\nRejected URLs (failed live check — likely hallucinated or stale):\n");
+            msg.push_str("\n\nRejected URLs (failed live-job-posting check — didn't load, too small, had 'not found' signals, or lacked keywords like 'Responsibilities'/'Qualifications'):\n");
             for r in &rejected {
                 msg.push_str(&format!("- {} ({} — {})\n", r.url, r.company, r.title));
             }
-            msg.push_str("\nIf this leaves too few matches, try different WebSearch queries — prefer ATS domains (boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com) and verify each URL with WebFetch before including it.");
+            msg.push_str("\nDon't retry the same URL. Use WebSearch with different ATS-domain queries and WebFetch each new candidate BEFORE including it. If you can only confirm a few postings, return those few — accuracy over quantity.");
         }
         Ok(CallToolResult::success(vec![Content::text(msg)]))
     }
 }
 
-/// Live-URL check used by report_job_matches to weed out hallucinated or
-/// stale links before they reach the UI. Uses GET (not HEAD — too many
-/// sites 405 on HEAD), short timeout, realistic UA to avoid trivial 403s.
-async fn url_is_live(url: &str) -> bool {
+/// Verify a URL looks like a real, live job posting. This is a best-effort
+/// check against LLM hallucinations — layered defense on top of the prompt
+/// (which already tells the agent to WebFetch + verify). Two gates:
+///
+///   1. Live check — GET returns 2xx with non-trivial body.
+///   2. Content check — body contains keywords typical of a job posting
+///      AND lacks common 'page not found' / landing-page signals.
+///
+/// Still imperfect. A determined hallucination that happens to generate a
+/// URL to a generic careers page may slip through. The UI surfaces a
+/// disclaimer telling users to verify before applying.
+async fn url_looks_like_job_posting(url: &str) -> bool {
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(10))
         .user_agent("Mozilla/5.0 (Macintosh; Ariadne Job Tracker) AppleWebKit/605.1.15")
         .build()
     {
         Ok(c) => c,
         Err(_) => return false,
     };
-    match client.get(url).send().await {
-        Ok(r) => r.status().is_success(),
-        Err(_) => false,
+    let resp = match client.get(url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => return false,
+    };
+    let body = match resp.text().await {
+        Ok(t) => t.to_lowercase(),
+        Err(_) => return false,
+    };
+    if body.len() < 2_000 {
+        return false; // Too small to be a real job posting.
     }
+    // Disqualifying signals: obvious error pages, parked domains, login walls
+    // that didn't return a redirect. Careers index pages would still pass
+    // these; we catch those via keyword presence below.
+    let disqualifiers = [
+        "page not found",
+        "404 not found",
+        "this job is no longer available",
+        "this position has been filled",
+        "no longer accepting applications",
+        "sign in to apply",
+        "log in to view",
+    ];
+    if disqualifiers.iter().any(|s| body.contains(s)) {
+        return false;
+    }
+    // Positive signals — a real posting almost always has at least two.
+    let posting_signals = [
+        "responsibilities",
+        "qualifications",
+        "requirements",
+        "what you'll do",
+        "what you will do",
+        "about the role",
+        "about this role",
+        "who you are",
+        "apply now",
+        "apply for this",
+        "years of experience",
+    ];
+    let hits = posting_signals.iter().filter(|s| body.contains(*s)).count();
+    hits >= 2
 }
 
 #[tool_handler]
