@@ -124,7 +124,7 @@ export async function renderSearch(container) {
           <li>More companies covered across ATSes</li>
           <li>Tags and filters (remote, comp bands, stage, seniority)</li>
           <li>More than ${AI_SEARCH_TARGET} jobs per run</li>
-          <li>Guaranteed-real URLs</li>
+          <li>Guaranteed-real URLs with date posted</li>
         </ul>
         ${jobbotConfigured ? `
           <button class="btn btn-primary" id="btn-jobbot-search">Run Paid Search</button>

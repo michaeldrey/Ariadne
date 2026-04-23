@@ -2,7 +2,7 @@ import {
   invoke, escapeHtml, formatDate, stageBadgeClass, fitScoreClass,
   toast, showModal, closeModal, navigate, renderMarkdown, isClaudeAgent,
 } from '../app.js';
-import { openChat, closeChat, openChatAndSend } from './chat.js';
+import { openChat, closeChat, openChatAndSend, openInterviewChat } from './chat.js';
 
 const STAGES = ['Sourced', 'Applied', 'Recruiter Screen', 'HM Interview', 'Onsite', 'Offer', 'Negotiating'];
 
@@ -766,6 +766,7 @@ function renderRoleHeader(role) {
         <button class="btn btn-primary" id="btn-open-chat">Chat</button>
         <button class="btn" id="btn-tailor" ${!role.jd_content ? 'disabled title="Add a JD first"' : ''}>Tailor Resume</button>
         <button class="btn" id="btn-research">Research</button>
+        <button class="btn" id="btn-interview">🎤 Practice Interview</button>
       </div>
     ` : `
       <div class="ai-actions">
@@ -796,6 +797,12 @@ function renderRoleHeader(role) {
 
   document.getElementById('btn-research')?.addEventListener('click', () => {
     openChatAndSend(role, 'Generate a research packet for this company and role — company overview, likely interview questions (technical, behavioral, system design), and questions I should ask. Save it with save_artifact(kind: "research").');
+  });
+
+  document.getElementById('btn-interview')?.addEventListener('click', () => {
+    openInterviewChat(role, 'behavioral',
+      `Start a behavioral interview for the ${role.title} role at ${role.company}. Ask me one STAR-format question at a time. After I answer, give brief feedback and move to the next question. Focus on leadership, conflict resolution, ambiguity, and impact. Go.`
+    );
   });
 
   document.getElementById('btn-delete-role').addEventListener('click', async () => {

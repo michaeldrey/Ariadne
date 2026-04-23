@@ -16,6 +16,7 @@ const EVENT_CHANNEL: &str = "agent:event";
 enum Scope {
     Role(String),
     Profile,
+    Interview(String), // role_id — interview mock session
 }
 
 impl Scope {
@@ -23,6 +24,7 @@ impl Scope {
         match self {
             Scope::Role(_) => "role",
             Scope::Profile => "profile",
+            Scope::Interview(_) => "interview",
         }
     }
 }
@@ -59,6 +61,18 @@ pub fn list_conversations(
             let role_id = role_id.ok_or("role_id required for scope_type='role'")?;
             let sql = "SELECT id, scope_type, role_id, title, created_at, updated_at
                        FROM conversations WHERE scope_type = 'role' AND role_id = ?1
+                       ORDER BY updated_at DESC, id DESC";
+            let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![role_id], row_to_conversation)
+                .map_err(|e| e.to_string())?
+                .collect();
+            (sql, rows)
+        }
+        "interview" => {
+            let role_id = role_id.ok_or("role_id required for scope_type='interview'")?;
+            let sql = "SELECT id, scope_type, role_id, title, created_at, updated_at
+                       FROM conversations WHERE scope_type = 'interview' AND role_id = ?1
                        ORDER BY updated_at DESC, id DESC";
             let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
             let rows = stmt
@@ -136,6 +150,14 @@ pub fn create_conversation(
             let role_id = role_id.ok_or("role_id required for scope_type='role'")?;
             conn.execute(
                 "INSERT INTO conversations (scope_type, role_id, title) VALUES ('role', ?1, ?2)",
+                params![role_id, title],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        "interview" => {
+            let role_id = role_id.ok_or("role_id required for scope_type='interview'")?;
+            conn.execute(
+                "INSERT INTO conversations (scope_type, role_id, title) VALUES ('interview', ?1, ?2)",
                 params![role_id, title],
             )
             .map_err(|e| e.to_string())?;
@@ -252,6 +274,10 @@ pub async fn send_to_conversation(
             "role" => {
                 let role_id = role_id.ok_or("Role conversation has no role_id")?;
                 Scope::Role(role_id)
+            }
+            "interview" => {
+                let role_id = role_id.ok_or("Interview conversation has no role_id")?;
+                Scope::Interview(role_id)
             }
             "profile" => Scope::Profile,
             other => return Err(format!("Unknown scope_type: {}", other)),
@@ -553,6 +579,7 @@ async fn consume_stream(
                             if ok {
                                 let (label, role_id) = match scope {
                                     Scope::Role(id) => ("role", Some(id.as_str())),
+                                    Scope::Interview(id) => ("role", Some(id.as_str())),
                                     Scope::Profile => ("profile", None),
                                 };
                                 crate::commands::acp::runtime::emit_data_changed(
@@ -614,6 +641,7 @@ fn tool_definitions(scope: &Scope) -> Value {
     match scope {
         Scope::Role(_) => role_tool_definitions(),
         Scope::Profile => profile_tool_definitions(),
+        Scope::Interview(_) => interview_tool_definitions(),
     }
 }
 
@@ -727,6 +755,49 @@ fn profile_tool_definitions() -> Value {
     ])
 }
 
+fn interview_tool_definitions() -> Value {
+    json!([
+        {
+            "name": "score_answer",
+            "description": "Score the candidate's last answer. Use this after every answer to provide structured feedback. The UI will display this as a scored card.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "question_summary": {"type": "string", "description": "The question that was asked (brief)."},
+                    "score": {"type": "integer", "minimum": 1, "maximum": 5, "description": "1=poor, 2=below average, 3=meets bar, 4=strong, 5=exceptional"},
+                    "strengths": {"type": "array", "items": {"type": "string"}, "description": "What the candidate did well."},
+                    "improvements": {"type": "array", "items": {"type": "string"}, "description": "Specific suggestions for improvement."},
+                    "category": {"type": "string", "enum": ["behavioral", "technical", "system_design", "general"], "description": "Question category."},
+                },
+                "required": ["question_summary", "score", "strengths", "improvements", "category"],
+            },
+        },
+        {
+            "name": "save_interview_note",
+            "description": "Save a note to the role's notes field — e.g. a summary scorecard at the end of a practice session. Appends to existing notes.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "note": {"type": "string", "description": "The note to append."},
+                },
+                "required": ["note"],
+            },
+        },
+        {
+            "name": "create_task",
+            "description": "Create a follow-up task linked to this role, e.g. 'Practice system design questions' or 'Review STAR story for conflict resolution'.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "due_date": {"type": "string", "description": "Optional YYYY-MM-DD date."},
+                },
+                "required": ["content"],
+            },
+        },
+    ])
+}
+
 fn run_tool(
     conn: &Connection,
     scope: &Scope,
@@ -739,6 +810,7 @@ fn run_tool(
     match scope {
         Scope::Role(role_id) => run_role_tool(conn, role_id, conversation_id, name, input, &today),
         Scope::Profile => run_profile_tool(conn, name, input),
+        Scope::Interview(role_id) => run_interview_tool(conn, role_id, name, input, &today),
     }
 }
 
@@ -824,6 +896,64 @@ fn run_role_tool(
     }
 }
 
+fn run_interview_tool(
+    conn: &Connection,
+    role_id: &str,
+    name: &str,
+    input: &Value,
+    today: &str,
+) -> (bool, String, String) {
+    match name {
+        "score_answer" => {
+            let score = input["score"].as_i64().unwrap_or(0);
+            let question = input["question_summary"].as_str().unwrap_or("");
+            let category = input["category"].as_str().unwrap_or("general");
+            // Return structured JSON so the frontend can render a nice card
+            let result = json!({
+                "score": score,
+                "question": question,
+                "category": category,
+                "strengths": input["strengths"],
+                "improvements": input["improvements"],
+            });
+            (true, format!("Score: {}/5 — {}", score, question), result.to_string())
+        }
+        "save_interview_note" => {
+            let note = input["note"].as_str().unwrap_or("");
+            // Append to existing notes with a timestamp header
+            let existing: Option<String> = conn
+                .query_row("SELECT notes FROM roles WHERE id = ?1", params![role_id], |r| r.get(0))
+                .unwrap_or(None);
+            let updated = match existing {
+                Some(existing) if !existing.trim().is_empty() => {
+                    format!("{}\n\n---\n**Interview Prep ({}):**\n{}", existing, today, note)
+                }
+                _ => format!("**Interview Prep ({}):**\n{}", today, note),
+            };
+            match conn.execute(
+                "UPDATE roles SET notes = ?1, updated_date = ?2 WHERE id = ?3",
+                params![updated, today, role_id],
+            ) {
+                Ok(_) => (true, "Interview note saved to role".into(), "Note appended to role notes".into()),
+                Err(e) => (false, format!("Failed: {}", e), e.to_string()),
+            }
+        }
+        "create_task" => {
+            let content = input["content"].as_str().unwrap_or("");
+            let due = input["due_date"].as_str();
+            let id = nanoid::nanoid!(10);
+            match conn.execute(
+                "INSERT INTO tasks (id, content, due_date, role_id) VALUES (?1, ?2, ?3, ?4)",
+                params![id, content, due, role_id],
+            ) {
+                Ok(_) => (true, format!("Task created: {}", content), format!("task_id={}", id)),
+                Err(e) => (false, format!("Failed: {}", e), e.to_string()),
+            }
+        }
+        _ => (false, format!("Unknown tool: {}", name), format!("Unknown tool: {}", name)),
+    }
+}
+
 fn run_profile_tool(conn: &Connection, name: &str, input: &Value) -> (bool, String, String) {
     match name {
         "save_work_stories" => {
@@ -869,6 +999,7 @@ fn build_system_prompt(conn: &Connection, scope: &Scope) -> rusqlite::Result<(St
     match scope {
         Scope::Role(role_id) => build_role_system_prompt(conn, role_id),
         Scope::Profile => build_profile_system_prompt(conn),
+        Scope::Interview(role_id) => build_interview_system_prompt(conn, role_id),
     }
 }
 
@@ -1057,6 +1188,90 @@ Use this markdown shape. If the user already has stories in a different shape, p
 
     // Dynamic: current stories/about/criteria (these can change via tool calls).
     let dynamic = format!("{stories_block}{about_block}{criteria_block}");
+
+    Ok((stable, dynamic))
+}
+
+fn build_interview_system_prompt(conn: &Connection, role_id: &str) -> rusqlite::Result<(String, String)> {
+    let (company, title, stage, jd, notes, research_packet): (
+        String, String, String, Option<String>, Option<String>, Option<String>,
+    ) = conn.query_row(
+        "SELECT company, title, stage, jd_content, notes, research_packet
+         FROM roles WHERE id = ?1",
+        params![role_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+    )?;
+
+    let (resume_content, work_stories, profile_name): (
+        Option<String>, Option<String>, Option<String>,
+    ) = conn.query_row(
+        "SELECT resume_content, work_stories, profile_name FROM settings WHERE id = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+
+    let me_section = profile_name
+        .map(|n| format!("The candidate's name is {}.\n", n))
+        .unwrap_or_default();
+    let resume_section = resume_content
+        .map(|r| format!("\n\n## Candidate Resume\n{}", r))
+        .unwrap_or_default();
+    let stories_section = work_stories
+        .map(|s| format!("\n\n## Candidate Work Stories (STAR)\n{}", s))
+        .unwrap_or_default();
+    let research_section = research_packet
+        .map(|r| format!("\n\n## Research Packet\n{}", r))
+        .unwrap_or_default();
+
+    let stable = format!(
+        r#"You are a mock interviewer conducting a practice interview for a candidate. You are interviewing them for the {title} role at {company}.
+
+{me_section}
+## Your Role
+You are a senior interviewer at {company}. Be realistic, professional, and calibrated to {company}'s interview bar. Your job:
+
+1. **Ask ONE question at a time.** Wait for the candidate to answer before moving on.
+2. **After each answer**, call the `score_answer` tool with a 1-5 score, strengths, and improvements. Then give brief verbal feedback and move to the next question.
+3. **Adapt difficulty.** If the candidate scores 4-5, raise the bar. If 1-2, give hints or simplify.
+4. **Be realistic.** Ask the kinds of questions {company} actually asks. Use the JD and research packet to inform your questions.
+5. **Use the candidate's background.** Reference their resume and work stories to ask follow-up questions that dig deeper into their experience.
+6. **At the end** (when the user says to wrap up, or after 5-6 questions), provide a summary scorecard using `save_interview_note` with overall scores by category, top strengths, and areas to work on.
+
+## Scoring Rubric
+- **5 (Exceptional):** Answer exceeds expectations. Strong STAR structure, quantified impact, clear ownership, insightful reflections.
+- **4 (Strong):** Solid answer. Good structure and specifics. Minor gaps in depth or quantification.
+- **3 (Meets Bar):** Acceptable answer. Has structure but lacks specifics, quantification, or depth.
+- **2 (Below Bar):** Vague or unfocused. Missing key elements (situation context, specific actions, measurable results).
+- **1 (Poor):** Off-topic, rambling, or fundamentally missing the point of the question.
+
+## Important
+- The candidate may be speaking via voice-to-text. Their answers may have transcription artifacts (missing punctuation, run-on sentences, filler words). This is normal — evaluate the CONTENT, not the formatting.
+- Keep your feedback actionable and specific. "Be more specific" is not helpful. "Quantify the latency improvement — was it 50ms to 10ms?" is helpful.
+- Don't be a pushover. If an answer is weak, say so directly but constructively.
+{resume_section}{stories_section}
+"#,
+        title = title,
+        company = company,
+    );
+
+    let dynamic = format!(
+        r#"
+## Job Description ({company} — {title})
+{jd}
+
+## Current Stage: {stage}
+{research_section}
+
+## Role Notes
+{notes}
+"#,
+        company = company,
+        title = title,
+        jd = jd.as_deref().unwrap_or("(no JD provided)"),
+        stage = stage,
+        research_section = research_section,
+        notes = notes.as_deref().unwrap_or("(none)"),
+    );
 
     Ok((stable, dynamic))
 }

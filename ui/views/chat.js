@@ -1,6 +1,8 @@
 import { invoke, escapeHtml, renderMarkdown, toast, isClaudeAgent } from '../app.js';
 
-// Scope:  { type: 'role', role: {id, company, title} } | { type: 'profile' }
+// Scope:  { type: 'role', role: {id, company, title} }
+//       | { type: 'profile', context: string }
+//       | { type: 'interview', role: {id, company, title}, mode: string }
 let currentScope = null;
 let currentConversations = [];  // list of {id, scope_type, role_id, title, created_at, updated_at}
 let currentConversationId = null;
@@ -28,7 +30,13 @@ export async function openProfileChatAndSend(text, context = 'general') {
   return sendAfterOpen(text);
 }
 
+export async function openInterviewChat(role, mode, initialPrompt) {
+  await openScope({ type: 'interview', role, mode });
+  if (initialPrompt) return sendAfterOpen(initialPrompt);
+}
+
 export async function closeChat() {
+  if (micActive) stopMic();
   const drawer = document.getElementById('chat-drawer');
   if (!drawer) return;
   drawer.classList.remove('chat-open');
@@ -90,13 +98,18 @@ async function openScope(scope) {
 }
 
 function scopeRoleId(scope) {
-  return scope.type === 'role' ? scope.role.id : null;
+  if (scope.type === 'role' || scope.type === 'interview') return scope.role.id;
+  return null;
+}
+
+function scopeType(scope) {
+  return scope.type; // 'role' | 'profile' | 'interview'
 }
 
 async function loadConversations() {
-  const scopeType = currentScope.type;
+  const st = scopeType(currentScope);
   const roleId = scopeRoleId(currentScope);
-  currentConversations = await invoke('list_conversations', { scopeType, roleId });
+  currentConversations = await invoke('list_conversations', { scopeType: st, roleId });
 }
 
 // Suggested prompt chips shown under the input. Driven by the scope + the
@@ -104,6 +117,15 @@ async function loadConversations() {
 // search-oriented prompts, while the generic Profile Coach shows onboarding
 // and resume prompts.
 function chipsForScope(scope) {
+  if (scope.type === 'interview') {
+    return [
+      { label: 'Score my last answer', prompt: 'Score my last answer on a 1-5 scale. What was strong, what could I improve?' },
+      { label: 'Ask a harder one', prompt: 'Give me a harder question in the same category.' },
+      { label: 'Switch to behavioral', prompt: 'Switch to a behavioral question.' },
+      { label: 'Switch to system design', prompt: 'Switch to a system design question.' },
+      { label: 'Wrap up + summary', prompt: 'Wrap up the interview. Give me an overall scorecard: strengths, areas to improve, and specific suggestions.' },
+    ];
+  }
   if (scope.type === 'role') {
     return [
       { label: 'Tailor resume', prompt: 'Tailor my resume for this role.' },
@@ -136,15 +158,22 @@ function chipsForScope(scope) {
 }
 
 function renderShell(scope) {
-  const header = scope.type === 'role'
-    ? `${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`
-    : 'Profile Coach';
+  const MODES = { behavioral: 'Behavioral', technical: 'Technical', system_design: 'System Design', mixed: 'Full Loop' };
+  let header, placeholder;
+  if (scope.type === 'interview') {
+    const modeLabel = MODES[scope.mode] || scope.mode;
+    header = `🎤 ${escapeHtml(scope.role.company)} — ${modeLabel} Interview`;
+    placeholder = 'Speak or type your answer…';
+  } else if (scope.type === 'role') {
+    header = `${escapeHtml(scope.role.company)} — ${escapeHtml(scope.role.title)}`;
+    placeholder = 'Ask about this role…';
+  } else {
+    header = 'Profile Coach';
+    placeholder = 'Ask about your profile, stories, or search…';
+  }
 
   const chips = chipsForScope(scope);
-
-  const placeholder = scope.type === 'role'
-    ? 'Ask about this role…'
-    : 'Ask about your profile, stories, or search…';
+  const showMic = hasSpeechRecognition();
 
   return `
     <div class="chat-header">
@@ -160,9 +189,11 @@ function renderShell(scope) {
         ${chips.map(c => `<button class="chat-chip" data-prompt="${escapeHtml(c.prompt)}">${escapeHtml(c.label)}</button>`).join('')}
       </div>
       <div class="chat-input-row">
+        ${showMic ? '<button class="btn-icon mic-btn" id="chat-mic" title="Voice input (click to start/stop)">🎙</button>' : ''}
         <textarea id="chat-input" placeholder="${placeholder}" rows="1"></textarea>
         <button class="btn btn-primary btn-sm chat-send-btn" id="chat-send">Send</button>
       </div>
+      <div id="mic-status" class="mic-status hidden"></div>
       <div class="chat-status" id="chat-status"></div>
     </div>
   `;
@@ -174,8 +205,6 @@ function wireShellHandlers(drawer) {
 
   drawer.querySelectorAll('.chat-chips-persistent .chat-chip').forEach(btn => {
     btn.addEventListener('click', () => {
-      // Submit directly — the chip IS the prompt; no reason to stage it in
-      // the input. User can still type custom prompts via the textarea.
       const input = document.getElementById('chat-input');
       input.value = btn.dataset.prompt;
       autoGrow(input);
@@ -191,6 +220,12 @@ function wireShellHandlers(drawer) {
     }
   });
   input.addEventListener('input', () => autoGrow(input));
+
+  // Mic button
+  const micBtn = document.getElementById('chat-mic');
+  if (micBtn) {
+    micBtn.addEventListener('click', toggleMic);
+  }
 }
 
 function renderThreadPicker() {
@@ -305,8 +340,7 @@ function sameScope(a, b) {
   if (!a || !b) return false;
   if (a.type !== b.type) return false;
   if (a.type === 'role') return a.role.id === b.role.id;
-  // Profile scopes differ if context differs — we want to re-render the chips
-  // when a different caller opens profile chat with a different intent.
+  if (a.type === 'interview') return a.role.id === b.role.id && a.mode === b.mode;
   return (a.context || 'general') === (b.context || 'general');
 }
 
@@ -623,4 +657,112 @@ function setStatus(text, error = false) {
 function autoGrow(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(120, el.scrollHeight) + 'px';
+}
+
+// ── Voice Input (Web Speech API) ──
+
+let recognition = null;
+let micActive = false;
+
+function hasSpeechRecognition() {
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function toggleMic() {
+  if (micActive) {
+    stopMic();
+  } else {
+    startMic();
+  }
+}
+
+function startMic() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    toast('Speech recognition not supported in this browser', 'error');
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  const input = document.getElementById('chat-input');
+  const micBtn = document.getElementById('chat-mic');
+  const micStatus = document.getElementById('mic-status');
+
+  // Store the text that was in the input before we started, so we append to it
+  const baseText = input?.value || '';
+  let finalTranscript = '';
+
+  recognition.onstart = () => {
+    micActive = true;
+    if (micBtn) micBtn.classList.add('mic-active');
+    if (micStatus) {
+      micStatus.textContent = 'Listening…';
+      micStatus.classList.remove('hidden');
+    }
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    finalTranscript = '';
+    for (let i = 0; i < event.results.length; i++) {
+      const result = event.results[i];
+      if (result.isFinal) {
+        finalTranscript += result[0].transcript;
+      } else {
+        interim += result[0].transcript;
+      }
+    }
+    if (input) {
+      input.value = baseText + (baseText ? ' ' : '') + finalTranscript + interim;
+      autoGrow(input);
+    }
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'no-speech') {
+      // Benign — just means silence. Let it keep listening.
+      return;
+    }
+    stopMic();
+    if (event.error === 'not-allowed') {
+      toast('Microphone access denied. Check your system preferences.', 'error');
+    }
+  };
+
+  recognition.onend = () => {
+    // If we're still supposed to be active, restart (continuous mode can stop on silence)
+    if (micActive) {
+      try { recognition.start(); } catch { stopMic(); }
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch (err) {
+    toast('Could not start speech recognition: ' + err.message, 'error');
+  }
+}
+
+function stopMic() {
+  micActive = false;
+  if (recognition) {
+    try { recognition.stop(); } catch {}
+    recognition = null;
+  }
+  const micBtn = document.getElementById('chat-mic');
+  const micStatus = document.getElementById('mic-status');
+  if (micBtn) micBtn.classList.remove('mic-active');
+  if (micStatus) micStatus.classList.add('hidden');
+
+  // Auto-send if we're in interview mode and there's text
+  if (currentScope?.type === 'interview') {
+    const input = document.getElementById('chat-input');
+    if (input && input.value.trim()) {
+      sendCurrent();
+    }
+  }
 }

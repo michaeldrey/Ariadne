@@ -1292,3 +1292,99 @@ thead th[data-sort-key] {
 .text-muted { color: var(--text-muted); }
 .text-sm { font-size: 12px; }
 .mono { font-family: var(--font-mono); }
+
+/* ── Interview Prep ── */
+
+.interview-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.interview-role-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: all var(--transition);
+  text-align: left;
+  font-family: var(--font);
+}
+
+.interview-role-card:hover { border-color: var(--accent); }
+.interview-role-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.interview-role-company { font-weight: 700; font-size: 14px; }
+.interview-role-title { font-size: 12px; color: var(--text-secondary); }
+.interview-role-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+
+.interview-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.interview-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 20px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition);
+  font-family: var(--font);
+}
+
+.interview-mode-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+.interview-mode-card:active { transform: scale(0.98); }
+
+.interview-mode-icon { font-size: 28px; }
+.interview-mode-label { font-weight: 700; font-size: 14px; }
+.interview-mode-desc { font-size: 11px; color: var(--text-secondary); line-height: 1.4; }
+
+/* ── Mic Button ── */
+
+.mic-btn {
+  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.mic-btn.mic-active {
+  background: var(--red-dim);
+  color: var(--red);
+  animation: mic-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(248, 113, 113, 0); }
+}
+
+.mic-status {
+  font-size: 11px;
+  color: var(--red);
+  padding: 2px 8px;
+  text-align: center;
+}
+
+.mic-status.hidden { display: none; }

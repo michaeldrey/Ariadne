@@ -35,6 +35,7 @@ const routes = {
   '/contacts': 'contacts',
   '/contacts/:id': 'contactDetail',
   '/search': 'search',
+  '/interview': 'interview',
   '/profile': 'profile',
   '/settings': 'settings',
 };
@@ -63,6 +64,7 @@ import { renderContacts, renderContactDetail } from './views/contacts.js';
 import { renderSearch } from './views/search.js';
 import { renderSettings } from './views/settings.js';
 import { renderProfile } from './views/profile.js';
+import { renderInterview } from './views/interview.js';
 import { closeChat, getCurrentChatScopeType } from './views/chat.js';
 
 async function renderView() {
@@ -82,7 +84,8 @@ async function renderView() {
   const chatScope = getCurrentChatScopeType();
   const keepChat =
     (view === 'roleDetail' && chatScope === 'role') ||
-    (view === 'profile' && chatScope === 'profile');
+    (view === 'profile' && chatScope === 'profile') ||
+    (view === 'interview' && chatScope === 'interview');
   if (!keepChat) {
     closeChat().catch(() => {});
   }
@@ -112,6 +115,9 @@ async function renderView() {
         break;
       case 'profile':
         await renderProfile(container);
+        break;
+      case 'interview':
+        await renderInterview(container);
         break;
       case 'settings':
         await renderSettings(container);
