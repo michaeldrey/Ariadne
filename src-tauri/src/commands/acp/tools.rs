@@ -15,10 +15,12 @@ use rmcp::{
     model::*,
     tool, tool_handler, tool_router,
 };
+use futures_util::future::join_all;
 use rusqlite::params;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone)]
@@ -427,19 +429,64 @@ impl AriadneTools {
         )]))
     }
 
-    #[tool(description = "Report job matches found during web search. Populates the Job Search results table in the UI with a row per match. Pass ALL matches in a single call (don't call incrementally). Profile-scoped chats only.")]
+    #[tool(description = "Report job matches found during web search. Populates the Job Search results table in the UI with a row per match. Pass ALL matches in a single call (don't call incrementally). Each URL is server-verified with a live GET — any URL that doesn't load is DROPPED before reaching the UI, and a list of dropped URLs is returned so you know which matches were rejected. Profile-scoped chats only.")]
     async fn report_job_matches(
         &self,
         Parameters(p): Parameters<ReportJobMatchesParams>,
     ) -> Result<CallToolResult, McpError> {
         self.require_profile()?;
-        let count = p.matches.len();
-        let payload = serde_json::to_value(&p.matches)
+        let submitted = p.matches.len();
+
+        // Parallel URL verification. Anything that doesn't respond with 2xx
+        // within the timeout is dropped — covers hallucinated URLs and
+        // stale/removed postings. The agent gets a list of rejections in
+        // the tool result so it can retry or report the gap.
+        let checks = p.matches.iter().map(|m| async move {
+            let ok = url_is_live(&m.url).await;
+            (ok, m.clone())
+        });
+        let results = join_all(checks).await;
+        let mut verified = Vec::new();
+        let mut rejected = Vec::new();
+        for (ok, m) in results {
+            if ok { verified.push(m); } else { rejected.push(m); }
+        }
+
+        let count = verified.len();
+        let payload = serde_json::to_value(&verified)
             .unwrap_or_else(|_| serde_json::json!([]));
         let _ = self.app.emit("jobs:matched", payload);
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Reported {} job matches to the UI", count
-        ))]))
+
+        let mut msg = format!(
+            "Reported {} verified match{} (of {} submitted) to the UI.",
+            count, if count == 1 { "" } else { "es" }, submitted,
+        );
+        if !rejected.is_empty() {
+            msg.push_str("\n\nRejected URLs (failed live check — likely hallucinated or stale):\n");
+            for r in &rejected {
+                msg.push_str(&format!("- {} ({} — {})\n", r.url, r.company, r.title));
+            }
+            msg.push_str("\nIf this leaves too few matches, try different WebSearch queries — prefer ATS domains (boards.greenhouse.io, jobs.lever.co, jobs.ashbyhq.com) and verify each URL with WebFetch before including it.");
+        }
+        Ok(CallToolResult::success(vec![Content::text(msg)]))
+    }
+}
+
+/// Live-URL check used by report_job_matches to weed out hallucinated or
+/// stale links before they reach the UI. Uses GET (not HEAD — too many
+/// sites 405 on HEAD), short timeout, realistic UA to avoid trivial 403s.
+async fn url_is_live(url: &str) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (Macintosh; Ariadne Job Tracker) AppleWebKit/605.1.15")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    match client.get(url).send().await {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
     }
 }
 

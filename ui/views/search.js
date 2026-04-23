@@ -11,6 +11,8 @@ let aiMatches = [];
 // Per-match state for the Set Up button (role creation + JD fetch +
 // analysis). Keyed by URL since that's the unique identifier we have.
 const settingUpByUrl = new Map(); // url -> 'setting-up' | 'done' | 'error'
+// Role IDs created by Set Up, so we can show a View button after success.
+const createdRoleIdByUrl = new Map();
 
 let jobsMatchedUnlisten = null;
 
@@ -203,11 +205,14 @@ function renderAiResults(container) {
 
 function renderAiRow(m, i) {
   const state = settingUpByUrl.get(m.url);
-  const buttonHtml = state === 'done'
-    ? `<span class="text-sm" style="color:var(--green)">✓ Added</span>`
-    : state === 'setting-up'
-      ? `<button class="btn btn-sm" disabled>Setting up…</button>`
-      : `<button class="btn btn-sm btn-primary btn-ai-setup" data-index="${i}">Set Up</button>`;
+  const roleId = createdRoleIdByUrl.get(m.url);
+  const buttonHtml = state === 'done' && roleId
+    ? `<a class="btn btn-sm btn-primary" href="#/roles/${roleId}">View →</a>`
+    : state === 'done'
+      ? `<span class="text-sm" style="color:var(--green)">✓ Added</span>`
+      : state === 'setting-up'
+        ? `<button class="btn btn-sm" disabled>Setting up…</button>`
+        : `<button class="btn btn-sm btn-primary btn-ai-setup" data-index="${i}">Set Up</button>`;
 
   const remoteBadge = m.remote === true
     ? '<span class="badge badge-good">Remote</span>'
@@ -259,6 +264,7 @@ async function setupFromAiMatch(match, container) {
         url: match.url,
       },
     });
+    createdRoleIdByUrl.set(match.url, role.id);
     // Claude-only: fetch_jd_from_url + tailor_resume use Anthropic/CLI.
     // On other agents we just create the role; user can paste the JD and
     // ask the agent to analyze it via chat.
