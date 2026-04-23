@@ -710,10 +710,26 @@ function startMic() {
   let finalTranscript = '';
 
   recognition.onstart = () => {
+    console.log('[mic] onstart');
     if (micStatus) {
       micStatus.innerHTML = '<span class="mic-dot"></span> Listening — speak now';
     }
   };
+  // Event-by-event logging so we can diagnose 'listening but no transcript'
+  // scenarios — each of these should fire if audio reaches the recognizer.
+  recognition.onaudiostart = () => console.log('[mic] onaudiostart — audio capture began');
+  recognition.onsoundstart = () => {
+    console.log('[mic] onsoundstart — sound detected');
+    if (micStatus) micStatus.innerHTML = '<span class="mic-dot"></span> Hearing sound…';
+  };
+  recognition.onspeechstart = () => {
+    console.log('[mic] onspeechstart — speech detected');
+    if (micStatus) micStatus.innerHTML = '<span class="mic-dot"></span> Hearing speech…';
+  };
+  recognition.onspeechend = () => console.log('[mic] onspeechend');
+  recognition.onsoundend = () => console.log('[mic] onsoundend');
+  recognition.onaudioend = () => console.log('[mic] onaudioend');
+  recognition.onnomatch = () => console.log('[mic] onnomatch — audio heard but no transcript match');
 
   recognition.onresult = (event) => {
     let interim = '';
@@ -727,18 +743,19 @@ function startMic() {
       }
     }
     const combined = finalTranscript + interim;
+    console.log('[mic] onresult — final="' + finalTranscript + '" interim="' + interim + '"');
     if (input) {
       input.value = baseText + (baseText ? ' ' : '') + combined;
       autoGrow(input);
     }
     if (micStatus) {
-      // Live word count gives visible proof the pipeline is receiving audio.
       const words = combined.trim().split(/\s+/).filter(Boolean).length;
       micStatus.innerHTML = `<span class="mic-dot"></span> Listening — ${words} word${words === 1 ? '' : 's'} captured`;
     }
   };
 
   recognition.onerror = (event) => {
+    console.log('[mic] onerror — error=' + event.error);
     // 'no-speech' = silence, 'aborted' = user stopped / onend about to fire.
     // Both are benign — don't surface a toast for them.
     if (event.error === 'no-speech' || event.error === 'aborted') return;
