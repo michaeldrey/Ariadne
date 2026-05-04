@@ -20,6 +20,7 @@ enum Scope {
 }
 
 impl Scope {
+    #[allow(dead_code)] // maps Scope to its DB scope_type string; available when constructing conversations from a Scope directly
     fn type_str(&self) -> &'static str {
         match self {
             Scope::Role(_) => "role",
@@ -346,7 +347,8 @@ async fn run_turn_for_conversation(
                 {"type": "text", "text": dynamic},
             ])
         } else {
-            json!([{"type": "text", "text": format!("{}\n{}", stable, dynamic)}])
+            json!([{"type": "text", "text": format!("{}
+{}", stable, dynamic)}])
         };
 
         let body = json!({
@@ -926,9 +928,14 @@ fn run_interview_tool(
                 .unwrap_or(None);
             let updated = match existing {
                 Some(existing) if !existing.trim().is_empty() => {
-                    format!("{}\n\n---\n**Interview Prep ({}):**\n{}", existing, today, note)
+                    format!("{}
+
+---
+**Interview Prep ({}):**
+{}", existing, today, note)
                 }
-                _ => format!("**Interview Prep ({}):**\n{}", today, note),
+                _ => format!("**Interview Prep ({}):**
+{}", today, note),
             };
             match conn.execute(
                 "UPDATE roles SET notes = ?1, updated_date = ?2 WHERE id = ?3",

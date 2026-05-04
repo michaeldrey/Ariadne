@@ -36,6 +36,7 @@ pub struct AriadneTools {
     pub scope: Scope,
     pub conversation_id: i64,
     pub app: AppHandle,
+    #[allow(dead_code)] // accessed by the rmcp `#[tool_handler]` macro expansion
     pub tool_router: ToolRouter<AriadneTools>,
 }
 
